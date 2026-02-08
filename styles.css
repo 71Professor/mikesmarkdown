@@ -64,7 +64,6 @@ body {
   display: flex;
   align-items: center;
   gap: 12px;
-  flex-wrap: wrap;
 }
 
 .status-pill {
@@ -74,19 +73,6 @@ body {
   color: var(--primary);
   font-size: 12px;
   font-weight: 600;
-}
-
-.status-message {
-  font-size: 13px;
-  color: var(--muted);
-}
-
-.status-message[data-tone="success"] {
-  color: #15803d;
-}
-
-.status-message[data-tone="error"] {
-  color: #b91c1c;
 }
 
 button {
@@ -179,11 +165,6 @@ textarea {
   line-height: 1.65;
 }
 
-.preview-content:focus {
-  outline: 2px solid rgba(47, 111, 235, 0.3);
-  outline-offset: -2px;
-}
-
 .preview-content h1,
 .preview-content h2,
 .preview-content h3 {
@@ -221,13 +202,6 @@ textarea {
   gap: 16px;
   color: var(--muted);
   font-size: 13px;
-}
-
-.footer-actions {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 12px;
-  align-items: center;
 }
 
 kbd {

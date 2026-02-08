@@ -24,8 +24,6 @@
         </div>
         <div class="status">
           <span class="status-pill">Live Preview</span>
-          <span class="status-message" id="status-message">Ready</span>
-          <button class="ghost" id="run-checks">Run checks</button>
           <button class="primary" id="copy-markdown">Copy Markdown</button>
         </div>
       </header>
@@ -52,7 +50,7 @@
               <button class="ghost" id="clear-preview">Clear</button>
             </div>
           </div>
-          <article id="markdown-preview" class="preview-content" tabindex="0"></article>
+          <article id="markdown-preview" class="preview-content"></article>
         </section>
       </main>
 
@@ -60,12 +58,7 @@
         <div>
           Tips: Use <kbd>⌘/Ctrl + S</kbd> to download, <kbd>⌘/Ctrl + Enter</kbd> to toggle focus.
         </div>
-        <div class="footer-actions">
-          <input type="file" id="import-md" accept=".md,.markdown,text/markdown" hidden />
-          <button class="ghost" id="import-button">Import .md</button>
-          <button class="ghost" id="export-html">Export HTML</button>
-          <button class="secondary" id="download-md">Download .md</button>
-        </div>
+        <button class="secondary" id="download-md">Download .md</button>
       </footer>
     </div>
 
