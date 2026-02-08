@@ -1,5 +1,6 @@
 /* ═══════════════════════════════════════════════════
-   HedgeDoc Markdown Editor & Viewer – Application
+   HedgeDoc Markdown Notes – Application
+   Multi-document management with overview dashboard
    ═══════════════════════════════════════════════════ */
 
 (function () {
@@ -9,6 +10,7 @@
   const $ = (sel) => document.querySelector(sel);
   const $$ = (sel) => document.querySelectorAll(sel);
 
+  const app = $(".app");
   const input = $("#markdown-input");
   const preview = $("#markdown-preview");
   const workspace = $(".workspace");
@@ -23,6 +25,7 @@
   const toggleTocBtn = $("#toggle-toc");
   const closeTocBtn = $("#close-toc");
   const toggleThemeBtn = $("#toggle-theme");
+  const toggleThemeEditorBtn = $("#toggle-theme-editor");
 
   const statLines = $("#stat-lines");
   const statWords = $("#stat-words");
@@ -30,94 +33,42 @@
   const statCursor = $("#stat-cursor");
   const saveStatus = $("#save-status");
 
-  // ── Default content ───────────────────────────────
-  const defaultMarkdown = `# Welcome to HedgeDoc
+  // Overview refs
+  const overviewSection = $("#overview");
+  const notesGrid = $("#notes-grid");
+  const notesEmpty = $("#notes-empty");
+  const searchInput = $("#search-notes");
+  const btnNewNote = $("#btn-new-note");
+  const btnNewNoteEmpty = $("#btn-new-note-empty");
+  const btnBackOverview = $("#btn-back-overview");
 
-Write **Markdown** on the left, see a live **preview** on the right.
+  // Delete modal refs
+  const deleteModal = $("#delete-modal");
+  const deleteModalText = $("#delete-modal-text");
+  const deleteConfirmBtn = $("#delete-confirm");
+  const deleteCancelBtn = $("#delete-cancel");
 
-## Features
+  // ── Storage keys ────────────────────────────────
+  const DOCS_INDEX_KEY = "hedgedoc_docs_index";
+  const DOC_PREFIX = "hedgedoc_doc_";
+  const THEME_KEY = "hedgedoc_theme";
+  const VIEW_KEY = "hedgedoc_view";
+  const SORT_KEY = "hedgedoc_sort";
+  const MIGRATED_KEY = "hedgedoc_migrated_v2";
 
-- **Live preview** with GitHub Flavored Markdown
-- **Syntax highlighting** for code blocks
-- **Dark mode** toggle (click the sun icon)
-- **Three view modes**: Split, Edit-only, Preview-only
-- **Table of Contents** sidebar (click the list icon)
-- **Drag & drop** \`.md\` or \`.txt\` files onto the editor
-- **Auto-save** to browser localStorage
-- **Download** as \`.md\` or \`.html\`
-- **Resizable panels** — drag the divider between editor and preview
-- **Keyboard shortcuts** for common formatting
-
-## Formatting Examples
-
-### Text Styles
-
-**Bold text**, *italic text*, ~~strikethrough~~, \`inline code\`
-
-### Links & Images
-
-[HedgeDoc](https://hedgedoc.org) — open-source collaborative markdown
-
-### Blockquote
-
-> "The best way to predict the future is to invent it."
-> — Alan Kay
-
-### Code Block
-
-\`\`\`javascript
-function greet(name) {
-  return \`Hello, \${name}! Welcome to HedgeDoc.\`;
-}
-
-console.log(greet("World"));
-\`\`\`
-
-### Task List
-
-- [x] Set up markdown editor
-- [x] Add live preview
-- [x] Implement dark mode
-- [ ] Add collaborative editing
-- [ ] Deploy to production
-
-### Table
-
-| Feature         | Status |
-|-----------------|--------|
-| Live Preview    | Done   |
-| Dark Mode       | Done   |
-| Syntax Highlight| Done   |
-| Table of Contents| Done  |
-| File Drag & Drop| Done   |
-
----
-
-### Keyboard Shortcuts
-
-| Shortcut       | Action             |
-|----------------|--------------------|
-| Ctrl + B       | Bold               |
-| Ctrl + I       | Italic             |
-| Ctrl + S       | Download .md       |
-| Ctrl + Shift+S | Download .html     |
-| Ctrl + Alt + 1 | Split view         |
-| Ctrl + Alt + 2 | Edit view          |
-| Ctrl + Alt + 3 | Preview view       |
-| Tab            | Insert indent      |
-| Shift + Tab    | Remove indent      |
-
----
-
-*Start editing to see changes reflected in real time!*
-`;
+  // ── State ─────────────────────────────────────────
+  let currentDocId = null;
+  let saveTimeout = null;
+  let scrollSyncEnabled = true;
+  let isEditorScrolling = false;
+  let isPreviewScrolling = false;
+  let currentSort = localStorage.getItem(SORT_KEY) || "lastAccessed";
+  let deleteTargetId = null;
 
   // ── Marked configuration ──────────────────────────
   const renderer = new marked.Renderer();
 
-  // Custom code renderer for syntax highlighting via highlight.js
   renderer.code = function (code, language) {
-    // marked v14+ passes an object; v4-v13 passes (code, lang) strings
     let text = code;
     let lang = language;
     if (typeof code === "object" && code !== null) {
@@ -148,25 +99,314 @@ console.log(greet("World"));
     renderer,
   });
 
-  // ── State ─────────────────────────────────────────
-  const STORAGE_KEY = "hedgedoc_content";
-  const THEME_KEY = "hedgedoc_theme";
-  const VIEW_KEY = "hedgedoc_view";
-  let saveTimeout = null;
-  let scrollSyncEnabled = true;
-  let isEditorScrolling = false;
-  let isPreviewScrolling = false;
+  // ══════════════════════════════════════════════════
+  //  Document Store (localStorage-based)
+  // ══════════════════════════════════════════════════
 
-  // ── Init ──────────────────────────────────────────
-  function init() {
-    loadTheme();
-    loadViewMode();
-    loadContent();
+  function getDocsIndex() {
+    try {
+      return JSON.parse(localStorage.getItem(DOCS_INDEX_KEY)) || [];
+    } catch {
+      return [];
+    }
+  }
+
+  function saveDocsIndex(index) {
+    localStorage.setItem(DOCS_INDEX_KEY, JSON.stringify(index));
+  }
+
+  function getDocContent(id) {
+    return localStorage.getItem(DOC_PREFIX + id) || "";
+  }
+
+  function saveDocContent(id, content) {
+    localStorage.setItem(DOC_PREFIX + id, content);
+  }
+
+  function deleteDocContent(id) {
+    localStorage.removeItem(DOC_PREFIX + id);
+  }
+
+  function generateId() {
+    return Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
+  }
+
+  function extractTitle(markdown) {
+    // Find first H1: line starting with "# "
+    const match = markdown.match(/^#\s+(.+)$/m);
+    if (match) return match[1].trim();
+    // Fallback: first non-empty line
+    const lines = markdown.split("\n");
+    for (const line of lines) {
+      const trimmed = line.trim();
+      if (trimmed) return trimmed.slice(0, 60);
+    }
+    return "Unbenannte Notiz";
+  }
+
+  function getTextPreview(markdown) {
+    // Strip markdown syntax for a plain-text preview
+    return markdown
+      .replace(/^#{1,6}\s+/gm, "")
+      .replace(/\*{1,2}([^*]+)\*{1,2}/g, "$1")
+      .replace(/~~([^~]+)~~/g, "$1")
+      .replace(/`([^`]+)`/g, "$1")
+      .replace(/\[([^\]]+)\]\([^)]+\)/g, "$1")
+      .replace(/!\[([^\]]*)\]\([^)]+\)/g, "")
+      .replace(/^[-*+]\s+/gm, "")
+      .replace(/^\d+\.\s+/gm, "")
+      .replace(/^>\s+/gm, "")
+      .replace(/---/g, "")
+      .replace(/\n{2,}/g, "\n")
+      .trim()
+      .slice(0, 150);
+  }
+
+  // ── Migration from single-doc format ──────────────
+  function migrateIfNeeded() {
+    if (localStorage.getItem(MIGRATED_KEY)) return;
+
+    const oldContent = localStorage.getItem("hedgedoc_content");
+    if (oldContent && oldContent.trim()) {
+      const id = generateId();
+      const now = new Date().toISOString();
+      const title = extractTitle(oldContent);
+      const index = getDocsIndex();
+      index.push({
+        id,
+        title,
+        created: now,
+        lastAccessed: now,
+        pinned: false,
+      });
+      saveDocsIndex(index);
+      saveDocContent(id, oldContent);
+    }
+
+    localStorage.setItem(MIGRATED_KEY, "1");
+  }
+
+  // ── Create new document ───────────────────────────
+  function createDocument(content) {
+    const md = content || "# Neue Notiz\n\nSchreibe hier deinen Text...\n";
+    const id = generateId();
+    const now = new Date().toISOString();
+    const title = extractTitle(md);
+    const index = getDocsIndex();
+    index.push({
+      id,
+      title,
+      created: now,
+      lastAccessed: now,
+      pinned: false,
+    });
+    saveDocsIndex(index);
+    saveDocContent(id, md);
+    return id;
+  }
+
+  // ── Update document metadata ──────────────────────
+  function updateDocMeta(id, updates) {
+    const index = getDocsIndex();
+    const doc = index.find((d) => d.id === id);
+    if (doc) {
+      Object.assign(doc, updates);
+      saveDocsIndex(index);
+    }
+  }
+
+  // ── Delete document ───────────────────────────────
+  function deleteDocument(id) {
+    let index = getDocsIndex();
+    index = index.filter((d) => d.id !== id);
+    saveDocsIndex(index);
+    deleteDocContent(id);
+    if (currentDocId === id) {
+      currentDocId = null;
+    }
+  }
+
+  // ══════════════════════════════════════════════════
+  //  Overview / Dashboard
+  // ══════════════════════════════════════════════════
+
+  function formatDate(isoString) {
+    const d = new Date(isoString);
+    const options = {
+      weekday: "short",
+      day: "2-digit",
+      month: "short",
+      year: "numeric",
+      hour: "2-digit",
+      minute: "2-digit",
+    };
+    return d.toLocaleDateString("de-DE", options);
+  }
+
+  function renderOverview() {
+    const index = getDocsIndex();
+    const query = searchInput.value.toLowerCase().trim();
+
+    // Filter
+    let filtered = index;
+    if (query) {
+      filtered = index.filter((doc) => {
+        if (doc.title.toLowerCase().includes(query)) return true;
+        const content = getDocContent(doc.id).toLowerCase();
+        return content.includes(query);
+      });
+    }
+
+    // Sort
+    filtered.sort((a, b) => {
+      // Pinned always first
+      if (a.pinned && !b.pinned) return -1;
+      if (!a.pinned && b.pinned) return 1;
+
+      switch (currentSort) {
+        case "title":
+          return a.title.localeCompare(b.title, "de");
+        case "created":
+          return new Date(b.created) - new Date(a.created);
+        case "lastAccessed":
+        default:
+          return new Date(b.lastAccessed) - new Date(a.lastAccessed);
+      }
+    });
+
+    notesGrid.innerHTML = "";
+
+    if (filtered.length === 0) {
+      notesGrid.style.display = "none";
+      notesEmpty.style.display = "";
+    } else {
+      notesGrid.style.display = "";
+      notesEmpty.style.display = "none";
+
+      filtered.forEach((doc) => {
+        const content = getDocContent(doc.id);
+        const textPreview = getTextPreview(content);
+
+        const card = document.createElement("div");
+        card.className = "note-card" + (doc.pinned ? " pinned" : "");
+        card.dataset.id = doc.id;
+
+        card.innerHTML = `
+          <div class="note-card-header">
+            <div class="note-card-title">${escapeHtml(doc.title)}</div>
+            <div class="note-card-actions">
+              <button class="note-card-btn pin-btn" title="${doc.pinned ? "Unpin" : "Pin"}" data-action="pin">
+                <svg width="14" height="14" viewBox="0 0 16 16" fill="${doc.pinned ? "currentColor" : "none"}" stroke="currentColor" stroke-width="1.5">
+                  <path d="M4 2h8l-1 5 2 2v1H8.5L8 15l-.5-5H3V9l2-2z"/>
+                </svg>
+              </button>
+              <button class="note-card-btn delete-btn" title="Löschen" data-action="delete">&times;</button>
+            </div>
+          </div>
+          ${textPreview ? `<div class="note-card-preview">${escapeHtml(textPreview)}</div>` : ""}
+          <div class="note-card-meta">
+            <span>&#128197; Erstellt: ${formatDate(doc.created)}</span>
+            <span>&#128338; Zuletzt: ${formatDate(doc.lastAccessed)}</span>
+          </div>
+        `;
+
+        // Click card to open
+        card.addEventListener("click", (e) => {
+          if (e.target.closest("[data-action]")) return;
+          openDocument(doc.id);
+        });
+
+        // Pin button
+        card.querySelector("[data-action='pin']").addEventListener("click", (e) => {
+          e.stopPropagation();
+          updateDocMeta(doc.id, { pinned: !doc.pinned });
+          renderOverview();
+        });
+
+        // Delete button
+        card.querySelector("[data-action='delete']").addEventListener("click", (e) => {
+          e.stopPropagation();
+          showDeleteModal(doc.id, doc.title);
+        });
+
+        notesGrid.appendChild(card);
+      });
+    }
+  }
+
+  function escapeHtml(str) {
+    const div = document.createElement("div");
+    div.textContent = str;
+    return div.innerHTML;
+  }
+
+  // ── Delete modal ──────────────────────────────────
+  function showDeleteModal(id, title) {
+    deleteTargetId = id;
+    deleteModalText.textContent = `"${title}" wird unwiderruflich gelöscht.`;
+    deleteModal.style.display = "";
+  }
+
+  function hideDeleteModal() {
+    deleteTargetId = null;
+    deleteModal.style.display = "none";
+  }
+
+  // ══════════════════════════════════════════════════
+  //  Page navigation (overview ↔ editor)
+  // ══════════════════════════════════════════════════
+
+  function showOverview() {
+    // Save current doc if editing
+    if (currentDocId) {
+      saveCurrentDoc();
+    }
+    currentDocId = null;
+    app.setAttribute("data-page", "overview");
+    renderOverview();
+  }
+
+  function openDocument(id) {
+    const index = getDocsIndex();
+    const doc = index.find((d) => d.id === id);
+    if (!doc) return;
+
+    currentDocId = id;
+
+    // Update last accessed
+    updateDocMeta(id, { lastAccessed: new Date().toISOString() });
+
+    // Load content
+    const content = getDocContent(id);
+    input.value = content;
+
+    // Switch to editor
+    app.setAttribute("data-page", "editor");
+
     updatePreview();
     updateLineNumbers();
     updateStats();
-    bindEvents();
+    markSaved();
+    input.focus();
   }
+
+  function saveCurrentDoc() {
+    if (!currentDocId) return;
+    const content = input.value;
+    saveDocContent(currentDocId, content);
+
+    // Update title from content
+    const title = extractTitle(content);
+    updateDocMeta(currentDocId, {
+      title,
+      lastAccessed: new Date().toISOString(),
+    });
+    markSaved();
+  }
+
+  // ══════════════════════════════════════════════════
+  //  Editor functionality (kept from original)
+  // ══════════════════════════════════════════════════
 
   // ── Theme ─────────────────────────────────────────
   function loadTheme() {
@@ -179,12 +419,16 @@ console.log(greet("World"));
   function applyTheme(theme) {
     const isDark = theme === "dark";
     document.documentElement.setAttribute("data-theme", isDark ? "dark" : "");
-    const sunIcon = toggleThemeBtn.querySelector(".icon-sun");
-    const moonIcon = toggleThemeBtn.querySelector(".icon-moon");
-    sunIcon.style.display = isDark ? "none" : "";
-    moonIcon.style.display = isDark ? "" : "none";
 
-    // Toggle highlight.js stylesheets
+    // Update both theme toggle buttons
+    [toggleThemeBtn, toggleThemeEditorBtn].forEach((btn) => {
+      if (!btn) return;
+      const sunIcon = btn.querySelector(".icon-sun");
+      const moonIcon = btn.querySelector(".icon-moon");
+      if (sunIcon) sunIcon.style.display = isDark ? "none" : "";
+      if (moonIcon) moonIcon.style.display = isDark ? "" : "none";
+    });
+
     const lightSheet = $("#hljs-light");
     const darkSheet = $("#hljs-dark");
     if (lightSheet) lightSheet.disabled = isDark;
@@ -212,20 +456,13 @@ console.log(greet("World"));
     localStorage.setItem(VIEW_KEY, mode);
   }
 
-  // ── Content persistence ───────────────────────────
-  function loadContent() {
-    const saved = localStorage.getItem(STORAGE_KEY);
-    input.value = saved !== null ? saved : defaultMarkdown;
-    markSaved();
-  }
-
+  // ── Auto-save ─────────────────────────────────────
   function scheduleAutoSave() {
     clearTimeout(saveTimeout);
     saveStatus.textContent = "Unsaved";
     saveStatus.classList.remove("saved");
     saveTimeout = setTimeout(() => {
-      localStorage.setItem(STORAGE_KEY, input.value);
-      markSaved();
+      saveCurrentDoc();
     }, 800);
   }
 
@@ -307,7 +544,6 @@ console.log(greet("World"));
     const replacement = before + selected + after;
     input.setRangeText(replacement, start, end, "select");
     input.focus();
-    // Place cursor after if no selection, inside if selection existed
     if (start === end) {
       input.setSelectionRange(start + before.length, start + before.length);
     } else {
@@ -319,7 +555,6 @@ console.log(greet("World"));
   function insertLinePrefix(prefix) {
     const start = input.selectionStart;
     const text = input.value;
-    // Find start of current line
     const lineStart = text.lastIndexOf("\n", start - 1) + 1;
     input.setRangeText(prefix, lineStart, lineStart, "end");
     input.focus();
@@ -411,7 +646,7 @@ console.log(greet("World"));
       const tocWidth = tocSidebar.classList.contains("open")
         ? tocSidebar.getBoundingClientRect().width
         : 0;
-      const available = workspaceWidth - tocWidth - 5; // 5 = gutter width
+      const available = workspaceWidth - tocWidth - 5;
       const diff = e.clientX - startX;
       const newEditorWidth = Math.max(
         200,
@@ -460,27 +695,38 @@ console.log(greet("World"));
       dragCounter = 0;
       dropOverlay.classList.remove("visible");
 
-      const file = e.dataTransfer.files[0];
-      if (!file) return;
+      const files = e.dataTransfer.files;
+      if (!files.length) return;
 
-      const validTypes = [
-        "text/markdown",
-        "text/plain",
-        "text/x-markdown",
-        "",
-      ];
       const validExts = [".md", ".markdown", ".txt", ".text"];
-      const ext = "." + file.name.split(".").pop().toLowerCase();
+      const validTypes = ["text/markdown", "text/plain", "text/x-markdown", ""];
 
-      if (validTypes.includes(file.type) || validExts.includes(ext)) {
-        const reader = new FileReader();
-        reader.onload = (evt) => {
-          input.value = evt.target.result;
-          onInput();
-          input.scrollTop = 0;
-        };
-        reader.readAsText(file);
-      }
+      // Handle multiple files: create a document for each
+      const isOnOverview = app.getAttribute("data-page") === "overview";
+
+      Array.from(files).forEach((file) => {
+        const ext = "." + file.name.split(".").pop().toLowerCase();
+        if (validTypes.includes(file.type) || validExts.includes(ext)) {
+          const reader = new FileReader();
+          reader.onload = (evt) => {
+            if (isOnOverview || files.length > 1) {
+              // Create new document for each dropped file
+              const id = createDocument(evt.target.result);
+              if (files.length === 1) {
+                openDocument(id);
+              } else {
+                renderOverview();
+              }
+            } else {
+              // Single file drop while in editor: replace current content
+              input.value = evt.target.result;
+              onInput();
+              input.scrollTop = 0;
+            }
+          };
+          reader.readAsText(file);
+        }
+      });
     });
   }
 
@@ -498,18 +744,20 @@ console.log(greet("World"));
   }
 
   function downloadMarkdown() {
-    downloadFile(input.value, "document.md", "text/markdown");
+    const title = extractTitle(input.value).replace(/[^a-zA-Z0-9äöüÄÖÜß\s-]/g, "").trim() || "document";
+    downloadFile(input.value, title + ".md", "text/markdown");
   }
 
   function downloadHtml() {
     const html = marked.parse(input.value);
     const sanitized = DOMPurify.sanitize(html);
+    const title = extractTitle(input.value);
     const fullHtml = `<!DOCTYPE html>
 <html lang="en">
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Markdown Export</title>
+  <title>${escapeHtml(title)}</title>
   <style>
     body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif; max-width: 800px; margin: 40px auto; padding: 0 20px; line-height: 1.7; color: #1a1d23; }
     pre { background: #0f172a; color: #e2e8f0; padding: 16px; border-radius: 8px; overflow-x: auto; }
@@ -528,7 +776,7 @@ console.log(greet("World"));
 ${sanitized}
 </body>
 </html>`;
-    downloadFile(fullHtml, "document.html", "text/html");
+    downloadFile(fullHtml, (extractTitle(input.value) || "document") + ".html", "text/html");
   }
 
   // ── Copy to clipboard ─────────────────────────────
@@ -540,7 +788,6 @@ ${sanitized}
         copyBtn.textContent = "Copy MD";
       }, 1500);
     } catch (err) {
-      // Fallback for non-secure contexts
       input.select();
       document.execCommand("copy");
       copyBtn.textContent = "Copied!";
@@ -565,7 +812,6 @@ ${sanitized}
     const end = input.selectionEnd;
 
     if (e.shiftKey) {
-      // Outdent: remove leading 2 spaces from selected lines
       const text = input.value;
       const lineStart = text.lastIndexOf("\n", start - 1) + 1;
       const lineEnd = text.indexOf("\n", end);
@@ -578,10 +824,8 @@ ${sanitized}
       input.setRangeText(dedented, lineStart, endIdx, "select");
       input.setSelectionRange(lineStart, lineStart + dedented.length);
     } else if (start === end) {
-      // No selection: insert 2 spaces
       input.setRangeText("  ", start, end, "end");
     } else {
-      // Indent selected lines
       const text = input.value;
       const lineStart = text.lastIndexOf("\n", start - 1) + 1;
       const lineEnd = text.indexOf("\n", end);
@@ -601,14 +845,12 @@ ${sanitized}
   function handleKeyDown(e) {
     const mod = e.ctrlKey || e.metaKey;
 
-    // Tab
     if (e.key === "Tab") {
       handleTab(e);
       e.stopPropagation();
       return;
     }
 
-    // Ctrl+B — Bold
     if (mod && e.key === "b") {
       e.preventDefault();
       e.stopPropagation();
@@ -616,7 +858,6 @@ ${sanitized}
       return;
     }
 
-    // Ctrl+I — Italic
     if (mod && e.key === "i") {
       e.preventDefault();
       e.stopPropagation();
@@ -624,7 +865,6 @@ ${sanitized}
       return;
     }
 
-    // Ctrl+S — Download .md
     if (mod && !e.shiftKey && e.key === "s") {
       e.preventDefault();
       e.stopPropagation();
@@ -632,7 +872,6 @@ ${sanitized}
       return;
     }
 
-    // Ctrl+Shift+S — Download .html
     if (mod && e.shiftKey && e.key === "S") {
       e.preventDefault();
       e.stopPropagation();
@@ -640,7 +879,6 @@ ${sanitized}
       return;
     }
 
-    // Ctrl+Alt+1/2/3 — View modes
     if (mod && e.altKey) {
       e.stopPropagation();
       if (e.key === "1") {
@@ -656,9 +894,52 @@ ${sanitized}
     }
   }
 
-  // ── Bind all events ───────────────────────────────
+  // ══════════════════════════════════════════════════
+  //  Event binding
+  // ══════════════════════════════════════════════════
+
   function bindEvents() {
-    // Input
+    // ── Overview events ─────────────────────────────
+    btnNewNote.addEventListener("click", () => {
+      const id = createDocument();
+      openDocument(id);
+    });
+
+    btnNewNoteEmpty.addEventListener("click", () => {
+      const id = createDocument();
+      openDocument(id);
+    });
+
+    btnBackOverview.addEventListener("click", showOverview);
+
+    searchInput.addEventListener("input", renderOverview);
+
+    $$(".sort-btn").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        currentSort = btn.dataset.sort;
+        localStorage.setItem(SORT_KEY, currentSort);
+        $$(".sort-btn").forEach((b) => b.classList.remove("active"));
+        btn.classList.add("active");
+        renderOverview();
+      });
+    });
+
+    // ── Delete modal events ─────────────────────────
+    deleteConfirmBtn.addEventListener("click", () => {
+      if (deleteTargetId) {
+        deleteDocument(deleteTargetId);
+        hideDeleteModal();
+        renderOverview();
+      }
+    });
+
+    deleteCancelBtn.addEventListener("click", hideDeleteModal);
+
+    deleteModal.addEventListener("click", (e) => {
+      if (e.target === deleteModal) hideDeleteModal();
+    });
+
+    // ── Editor input events ─────────────────────────
     input.addEventListener("input", onInput);
     input.addEventListener("scroll", () => {
       syncLineNumberScroll();
@@ -668,7 +949,6 @@ ${sanitized}
     input.addEventListener("click", updateCursorPos);
     input.addEventListener("keyup", updateCursorPos);
 
-    // Preview scroll sync
     preview.addEventListener("scroll", () => {
       if (scrollSyncEnabled) syncPreviewToEditor();
     });
@@ -680,10 +960,13 @@ ${sanitized}
 
     // Toolbar buttons
     $$("[data-action]").forEach((btn) => {
-      btn.addEventListener("click", () => {
-        const action = toolbarActions[btn.dataset.action];
-        if (action) action();
-      });
+      // Only bind toolbar formatting actions (not card actions)
+      if (btn.closest(".toolbar")) {
+        btn.addEventListener("click", () => {
+          const action = toolbarActions[btn.dataset.action];
+          if (action) action();
+        });
+      }
     });
 
     // Header actions
@@ -691,8 +974,9 @@ ${sanitized}
     downloadMdBtn.addEventListener("click", downloadMarkdown);
     downloadHtmlBtn.addEventListener("click", downloadHtml);
 
-    // Theme toggle
+    // Theme toggles
     toggleThemeBtn.addEventListener("click", toggleTheme);
+    toggleThemeEditorBtn.addEventListener("click", toggleTheme);
 
     // ToC toggle
     toggleTocBtn.addEventListener("click", () => {
@@ -702,16 +986,18 @@ ${sanitized}
       tocSidebar.classList.remove("open");
     });
 
-    // Global keyboard shortcuts (for when focus is not in textarea)
+    // Global keyboard shortcuts
     document.addEventListener("keydown", (e) => {
       const mod = e.ctrlKey || e.metaKey;
-      if (mod && !e.shiftKey && e.key === "s") {
-        e.preventDefault();
-        downloadMarkdown();
-      }
-      if (mod && e.shiftKey && e.key === "S") {
-        e.preventDefault();
-        downloadHtml();
+      if (app.getAttribute("data-page") === "editor") {
+        if (mod && !e.shiftKey && e.key === "s") {
+          e.preventDefault();
+          downloadMarkdown();
+        }
+        if (mod && e.shiftKey && e.key === "S") {
+          e.preventDefault();
+          downloadHtml();
+        }
       }
       if (mod && e.altKey) {
         if (e.key === "1") {
@@ -725,6 +1011,10 @@ ${sanitized}
           setViewMode("preview");
         }
       }
+      // Escape goes back to overview
+      if (e.key === "Escape" && app.getAttribute("data-page") === "editor") {
+        showOverview();
+      }
     });
 
     // Gutter resize
@@ -734,6 +1024,26 @@ ${sanitized}
     initDragDrop();
   }
 
-  // ── Start ─────────────────────────────────────────
+  // ══════════════════════════════════════════════════
+  //  Init
+  // ══════════════════════════════════════════════════
+
+  function init() {
+    migrateIfNeeded();
+    loadTheme();
+    loadViewMode();
+
+    // Restore sort button state
+    $$(".sort-btn").forEach((btn) => {
+      btn.classList.toggle("active", btn.dataset.sort === currentSort);
+    });
+
+    // Start on overview
+    app.setAttribute("data-page", "overview");
+    renderOverview();
+
+    bindEvents();
+  }
+
   init();
 })();
