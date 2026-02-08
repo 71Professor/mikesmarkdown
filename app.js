@@ -1,6 +1,6 @@
 /* ═══════════════════════════════════════════════════
    HedgeDoc Markdown Notes – Application
-   Multi-document management with overview dashboard
+   Multi-document management with MySQL backend
    ═══════════════════════════════════════════════════ */
 
 (function () {
@@ -34,7 +34,6 @@
   const saveStatus = $("#save-status");
 
   // Overview refs
-  const overviewSection = $("#overview");
   const notesGrid = $("#notes-grid");
   const notesEmpty = $("#notes-empty");
   const searchInput = $("#search-notes");
@@ -48,13 +47,11 @@
   const deleteConfirmBtn = $("#delete-confirm");
   const deleteCancelBtn = $("#delete-cancel");
 
-  // ── Storage keys ────────────────────────────────
-  const DOCS_INDEX_KEY = "hedgedoc_docs_index";
-  const DOC_PREFIX = "hedgedoc_doc_";
+  // ── Constants ─────────────────────────────────────
+  const API = "api.php";
   const THEME_KEY = "hedgedoc_theme";
   const VIEW_KEY = "hedgedoc_view";
   const SORT_KEY = "hedgedoc_sort";
-  const MIGRATED_KEY = "hedgedoc_migrated_v2";
 
   // ── State ─────────────────────────────────────────
   let currentDocId = null;
@@ -64,6 +61,7 @@
   let isPreviewScrolling = false;
   let currentSort = localStorage.getItem(SORT_KEY) || "lastAccessed";
   let deleteTargetId = null;
+  let cachedNotes = []; // cached list for client-side sorting
 
   // ── Marked configuration ──────────────────────────
   const renderer = new marked.Renderer();
@@ -100,42 +98,35 @@
   });
 
   // ══════════════════════════════════════════════════
-  //  Document Store (localStorage-based)
+  //  API Client
   // ══════════════════════════════════════════════════
 
-  function getDocsIndex() {
-    try {
-      return JSON.parse(localStorage.getItem(DOCS_INDEX_KEY)) || [];
-    } catch {
-      return [];
+  async function apiGet(action, params = {}) {
+    const url = new URL(API, window.location.href);
+    url.searchParams.set("action", action);
+    for (const [k, v] of Object.entries(params)) {
+      url.searchParams.set(k, v);
     }
+    const res = await fetch(url);
+    const json = await res.json();
+    if (!json.success) throw new Error(json.error || "API error");
+    return json.data;
   }
 
-  function saveDocsIndex(index) {
-    localStorage.setItem(DOCS_INDEX_KEY, JSON.stringify(index));
-  }
-
-  function getDocContent(id) {
-    return localStorage.getItem(DOC_PREFIX + id) || "";
-  }
-
-  function saveDocContent(id, content) {
-    localStorage.setItem(DOC_PREFIX + id, content);
-  }
-
-  function deleteDocContent(id) {
-    localStorage.removeItem(DOC_PREFIX + id);
-  }
-
-  function generateId() {
-    return Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
+  async function apiPost(action, data = {}) {
+    const res = await fetch(API, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ action, ...data }),
+    });
+    const json = await res.json();
+    if (!json.success) throw new Error(json.error || "API error");
+    return json.data;
   }
 
   function extractTitle(markdown) {
-    // Find first H1: line starting with "# "
     const match = markdown.match(/^#\s+(.+)$/m);
     if (match) return match[1].trim();
-    // Fallback: first non-empty line
     const lines = markdown.split("\n");
     for (const line of lines) {
       const trimmed = line.trim();
@@ -144,94 +135,12 @@
     return "Unbenannte Notiz";
   }
 
-  function getTextPreview(markdown) {
-    // Strip markdown syntax for a plain-text preview
-    return markdown
-      .replace(/^#{1,6}\s+/gm, "")
-      .replace(/\*{1,2}([^*]+)\*{1,2}/g, "$1")
-      .replace(/~~([^~]+)~~/g, "$1")
-      .replace(/`([^`]+)`/g, "$1")
-      .replace(/\[([^\]]+)\]\([^)]+\)/g, "$1")
-      .replace(/!\[([^\]]*)\]\([^)]+\)/g, "")
-      .replace(/^[-*+]\s+/gm, "")
-      .replace(/^\d+\.\s+/gm, "")
-      .replace(/^>\s+/gm, "")
-      .replace(/---/g, "")
-      .replace(/\n{2,}/g, "\n")
-      .trim()
-      .slice(0, 150);
-  }
-
-  // ── Migration from single-doc format ──────────────
-  function migrateIfNeeded() {
-    if (localStorage.getItem(MIGRATED_KEY)) return;
-
-    const oldContent = localStorage.getItem("hedgedoc_content");
-    if (oldContent && oldContent.trim()) {
-      const id = generateId();
-      const now = new Date().toISOString();
-      const title = extractTitle(oldContent);
-      const index = getDocsIndex();
-      index.push({
-        id,
-        title,
-        created: now,
-        lastAccessed: now,
-        pinned: false,
-      });
-      saveDocsIndex(index);
-      saveDocContent(id, oldContent);
-    }
-
-    localStorage.setItem(MIGRATED_KEY, "1");
-  }
-
-  // ── Create new document ───────────────────────────
-  function createDocument(content) {
-    const md = content || "# Neue Notiz\n\nSchreibe hier deinen Text...\n";
-    const id = generateId();
-    const now = new Date().toISOString();
-    const title = extractTitle(md);
-    const index = getDocsIndex();
-    index.push({
-      id,
-      title,
-      created: now,
-      lastAccessed: now,
-      pinned: false,
-    });
-    saveDocsIndex(index);
-    saveDocContent(id, md);
-    return id;
-  }
-
-  // ── Update document metadata ──────────────────────
-  function updateDocMeta(id, updates) {
-    const index = getDocsIndex();
-    const doc = index.find((d) => d.id === id);
-    if (doc) {
-      Object.assign(doc, updates);
-      saveDocsIndex(index);
-    }
-  }
-
-  // ── Delete document ───────────────────────────────
-  function deleteDocument(id) {
-    let index = getDocsIndex();
-    index = index.filter((d) => d.id !== id);
-    saveDocsIndex(index);
-    deleteDocContent(id);
-    if (currentDocId === id) {
-      currentDocId = null;
-    }
-  }
-
   // ══════════════════════════════════════════════════
   //  Overview / Dashboard
   // ══════════════════════════════════════════════════
 
-  function formatDate(isoString) {
-    const d = new Date(isoString);
+  function formatDate(dateString) {
+    const d = new Date(dateString.includes("T") ? dateString : dateString + "Z");
     const options = {
       weekday: "short",
       day: "2-digit",
@@ -243,23 +152,23 @@
     return d.toLocaleDateString("de-DE", options);
   }
 
-  function renderOverview() {
-    const index = getDocsIndex();
-    const query = searchInput.value.toLowerCase().trim();
+  let searchDebounce = null;
 
-    // Filter
-    let filtered = index;
-    if (query) {
-      filtered = index.filter((doc) => {
-        if (doc.title.toLowerCase().includes(query)) return true;
-        const content = getDocContent(doc.id).toLowerCase();
-        return content.includes(query);
-      });
+  async function renderOverview() {
+    const query = searchInput.value.trim();
+
+    try {
+      const params = {};
+      if (query) params.q = query;
+      cachedNotes = await apiGet("list", params);
+    } catch (err) {
+      console.error("Failed to load notes:", err);
+      notesGrid.innerHTML = '<div class="notes-empty"><p>Fehler beim Laden der Notizen.</p></div>';
+      return;
     }
 
-    // Sort
-    filtered.sort((a, b) => {
-      // Pinned always first
+    // Client-side sort (server returns pinned-first, lastAccessed desc by default)
+    const sorted = [...cachedNotes].sort((a, b) => {
       if (a.pinned && !b.pinned) return -1;
       if (!a.pinned && b.pinned) return 1;
 
@@ -276,17 +185,14 @@
 
     notesGrid.innerHTML = "";
 
-    if (filtered.length === 0) {
+    if (sorted.length === 0) {
       notesGrid.style.display = "none";
       notesEmpty.style.display = "";
     } else {
       notesGrid.style.display = "";
       notesEmpty.style.display = "none";
 
-      filtered.forEach((doc) => {
-        const content = getDocContent(doc.id);
-        const textPreview = getTextPreview(content);
-
+      sorted.forEach((doc) => {
         const card = document.createElement("div");
         card.className = "note-card" + (doc.pinned ? " pinned" : "");
         card.dataset.id = doc.id;
@@ -303,7 +209,7 @@
               <button class="note-card-btn delete-btn" title="Löschen" data-action="delete">&times;</button>
             </div>
           </div>
-          ${textPreview ? `<div class="note-card-preview">${escapeHtml(textPreview)}</div>` : ""}
+          ${doc.preview ? `<div class="note-card-preview">${escapeHtml(doc.preview)}</div>` : ""}
           <div class="note-card-meta">
             <span>&#128197; Erstellt: ${formatDate(doc.created)}</span>
             <span>&#128338; Zuletzt: ${formatDate(doc.lastAccessed)}</span>
@@ -317,10 +223,14 @@
         });
 
         // Pin button
-        card.querySelector("[data-action='pin']").addEventListener("click", (e) => {
+        card.querySelector("[data-action='pin']").addEventListener("click", async (e) => {
           e.stopPropagation();
-          updateDocMeta(doc.id, { pinned: !doc.pinned });
-          renderOverview();
+          try {
+            await apiPost("togglePin", { id: doc.id });
+            renderOverview();
+          } catch (err) {
+            console.error("Failed to toggle pin:", err);
+          }
         });
 
         // Delete button
@@ -356,56 +266,51 @@
   //  Page navigation (overview ↔ editor)
   // ══════════════════════════════════════════════════
 
-  function showOverview() {
-    // Save current doc if editing
+  async function showOverview() {
     if (currentDocId) {
-      saveCurrentDoc();
+      await saveCurrentDoc();
     }
     currentDocId = null;
     app.setAttribute("data-page", "overview");
     renderOverview();
   }
 
-  function openDocument(id) {
-    const index = getDocsIndex();
-    const doc = index.find((d) => d.id === id);
-    if (!doc) return;
+  async function openDocument(id) {
+    try {
+      const doc = await apiGet("get", { id });
 
-    currentDocId = id;
+      currentDocId = id;
+      input.value = doc.content;
 
-    // Update last accessed
-    updateDocMeta(id, { lastAccessed: new Date().toISOString() });
+      app.setAttribute("data-page", "editor");
 
-    // Load content
-    const content = getDocContent(id);
-    input.value = content;
-
-    // Switch to editor
-    app.setAttribute("data-page", "editor");
-
-    updatePreview();
-    updateLineNumbers();
-    updateStats();
-    markSaved();
-    input.focus();
+      updatePreview();
+      updateLineNumbers();
+      updateStats();
+      markSaved();
+      input.focus();
+    } catch (err) {
+      console.error("Failed to open document:", err);
+    }
   }
 
-  function saveCurrentDoc() {
+  async function saveCurrentDoc() {
     if (!currentDocId) return;
-    const content = input.value;
-    saveDocContent(currentDocId, content);
-
-    // Update title from content
-    const title = extractTitle(content);
-    updateDocMeta(currentDocId, {
-      title,
-      lastAccessed: new Date().toISOString(),
-    });
-    markSaved();
+    try {
+      await apiPost("update", {
+        id: currentDocId,
+        content: input.value,
+      });
+      markSaved();
+    } catch (err) {
+      console.error("Failed to save:", err);
+      saveStatus.textContent = "Save failed";
+      saveStatus.classList.remove("saved");
+    }
   }
 
   // ══════════════════════════════════════════════════
-  //  Editor functionality (kept from original)
+  //  Editor functionality
   // ══════════════════════════════════════════════════
 
   // ── Theme ─────────────────────────────────────────
@@ -420,7 +325,6 @@
     const isDark = theme === "dark";
     document.documentElement.setAttribute("data-theme", isDark ? "dark" : "");
 
-    // Update both theme toggle buttons
     [toggleThemeBtn, toggleThemeEditorBtn].forEach((btn) => {
       if (!btn) return;
       const sunIcon = btn.querySelector(".icon-sun");
@@ -463,7 +367,7 @@
     saveStatus.classList.remove("saved");
     saveTimeout = setTimeout(() => {
       saveCurrentDoc();
-    }, 800);
+    }, 1200);
   }
 
   function markSaved() {
@@ -701,24 +605,25 @@
       const validExts = [".md", ".markdown", ".txt", ".text"];
       const validTypes = ["text/markdown", "text/plain", "text/x-markdown", ""];
 
-      // Handle multiple files: create a document for each
       const isOnOverview = app.getAttribute("data-page") === "overview";
 
       Array.from(files).forEach((file) => {
         const ext = "." + file.name.split(".").pop().toLowerCase();
         if (validTypes.includes(file.type) || validExts.includes(ext)) {
           const reader = new FileReader();
-          reader.onload = (evt) => {
+          reader.onload = async (evt) => {
             if (isOnOverview || files.length > 1) {
-              // Create new document for each dropped file
-              const id = createDocument(evt.target.result);
-              if (files.length === 1) {
-                openDocument(id);
-              } else {
-                renderOverview();
+              try {
+                const doc = await apiPost("create", { content: evt.target.result });
+                if (files.length === 1) {
+                  openDocument(doc.id);
+                } else {
+                  renderOverview();
+                }
+              } catch (err) {
+                console.error("Failed to import file:", err);
               }
             } else {
-              // Single file drop while in editor: replace current content
               input.value = evt.target.result;
               onInput();
               input.scrollTop = 0;
@@ -776,7 +681,7 @@
 ${sanitized}
 </body>
 </html>`;
-    downloadFile(fullHtml, (extractTitle(input.value) || "document") + ".html", "text/html");
+    downloadFile(fullHtml, (title || "document") + ".html", "text/html");
   }
 
   // ── Copy to clipboard ─────────────────────────────
@@ -900,19 +805,33 @@ ${sanitized}
 
   function bindEvents() {
     // ── Overview events ─────────────────────────────
-    btnNewNote.addEventListener("click", () => {
-      const id = createDocument();
-      openDocument(id);
+    btnNewNote.addEventListener("click", async () => {
+      try {
+        const doc = await apiPost("create", {});
+        openDocument(doc.id);
+      } catch (err) {
+        console.error("Failed to create note:", err);
+      }
     });
 
-    btnNewNoteEmpty.addEventListener("click", () => {
-      const id = createDocument();
-      openDocument(id);
+    btnNewNoteEmpty.addEventListener("click", async () => {
+      try {
+        const doc = await apiPost("create", {});
+        openDocument(doc.id);
+      } catch (err) {
+        console.error("Failed to create note:", err);
+      }
     });
 
-    btnBackOverview.addEventListener("click", showOverview);
+    btnBackOverview.addEventListener("click", () => showOverview());
 
-    searchInput.addEventListener("input", renderOverview);
+    // Debounced search (calls API with search query)
+    searchInput.addEventListener("input", () => {
+      clearTimeout(searchDebounce);
+      searchDebounce = setTimeout(() => {
+        renderOverview();
+      }, 300);
+    });
 
     $$(".sort-btn").forEach((btn) => {
       btn.addEventListener("click", () => {
@@ -925,11 +844,15 @@ ${sanitized}
     });
 
     // ── Delete modal events ─────────────────────────
-    deleteConfirmBtn.addEventListener("click", () => {
+    deleteConfirmBtn.addEventListener("click", async () => {
       if (deleteTargetId) {
-        deleteDocument(deleteTargetId);
-        hideDeleteModal();
-        renderOverview();
+        try {
+          await apiPost("delete", { id: deleteTargetId });
+          hideDeleteModal();
+          renderOverview();
+        } catch (err) {
+          console.error("Failed to delete:", err);
+        }
       }
     });
 
@@ -960,7 +883,6 @@ ${sanitized}
 
     // Toolbar buttons
     $$("[data-action]").forEach((btn) => {
-      // Only bind toolbar formatting actions (not card actions)
       if (btn.closest(".toolbar")) {
         btn.addEventListener("click", () => {
           const action = toolbarActions[btn.dataset.action];
@@ -1029,7 +951,6 @@ ${sanitized}
   // ══════════════════════════════════════════════════
 
   function init() {
-    migrateIfNeeded();
     loadTheme();
     loadViewMode();
 
