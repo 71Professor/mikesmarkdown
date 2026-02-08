@@ -3,7 +3,7 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>HedgeDoc Style Markdown Editor</title>
+    <title>HedgeDoc – Collaborative Markdown Editor</title>
     <link rel="stylesheet" href="styles.css" />
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
@@ -11,59 +11,160 @@
       href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap"
       rel="stylesheet"
     />
+    <link
+      rel="stylesheet"
+      href="https://cdn.jsdelivr.net/gh/highlightjs/cdn-release@11.9.0/build/styles/github.min.css"
+      id="hljs-light"
+    />
+    <link
+      rel="stylesheet"
+      href="https://cdn.jsdelivr.net/gh/highlightjs/cdn-release@11.9.0/build/styles/github-dark.min.css"
+      id="hljs-dark"
+      disabled
+    />
   </head>
   <body>
     <div class="app">
+      <!-- ─── Top Bar ─── -->
       <header class="app-header">
         <div class="brand">
           <span class="brand-dot"></span>
           <div>
-            <h1>HedgeDoc Workspace</h1>
-            <p>Write Markdown on the left, preview on the right.</p>
+            <h1>HedgeDoc</h1>
+            <p class="brand-tagline">Real-time collaborative markdown</p>
           </div>
         </div>
-        <div class="status">
-          <span class="status-pill">Live Preview</span>
-          <button class="primary" id="copy-markdown">Copy Markdown</button>
+
+        <nav class="view-toggles" aria-label="View mode">
+          <button class="view-btn active" data-view="split" title="Split view (Ctrl+Alt+1)">
+            <svg width="16" height="16" viewBox="0 0 16 16" fill="none"><rect x="1" y="2" width="6" height="12" rx="1" stroke="currentColor" stroke-width="1.5"/><rect x="9" y="2" width="6" height="12" rx="1" stroke="currentColor" stroke-width="1.5"/></svg>
+            Split
+          </button>
+          <button class="view-btn" data-view="edit" title="Edit only (Ctrl+Alt+2)">
+            <svg width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M3 13l1.5-5L11 1.5 14.5 5 8 11.5 3 13z" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/></svg>
+            Edit
+          </button>
+          <button class="view-btn" data-view="preview" title="Preview only (Ctrl+Alt+3)">
+            <svg width="16" height="16" viewBox="0 0 16 16" fill="none"><circle cx="8" cy="8" r="3" stroke="currentColor" stroke-width="1.5"/><path d="M1 8s3-5 7-5 7 5 7 5-3 5-7 5-7-5-7-5z" stroke="currentColor" stroke-width="1.5"/></svg>
+            View
+          </button>
+        </nav>
+
+        <div class="header-actions">
+          <button class="icon-btn" id="toggle-toc" title="Table of Contents">
+            <svg width="18" height="18" viewBox="0 0 18 18" fill="none"><path d="M3 4h12M3 9h8M3 14h10" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
+          </button>
+          <button class="icon-btn" id="toggle-theme" title="Toggle dark mode">
+            <svg class="icon-sun" width="18" height="18" viewBox="0 0 18 18" fill="none"><circle cx="9" cy="9" r="3.5" stroke="currentColor" stroke-width="1.5"/><path d="M9 1v2M9 15v2M1 9h2M15 9h2M3.3 3.3l1.4 1.4M13.3 13.3l1.4 1.4M13.3 3.3l1.4 1.4M3.3 13.3l1.4 1.4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
+            <svg class="icon-moon" width="18" height="18" viewBox="0 0 18 18" fill="none" style="display:none"><path d="M15 10.6A7 7 0 017.4 3 7 7 0 109 16a7 7 0 006-5.4z" stroke="currentColor" stroke-width="1.5"/></svg>
+          </button>
+          <button class="primary" id="copy-markdown">Copy MD</button>
         </div>
       </header>
 
-      <main class="workspace">
-        <section class="editor" aria-label="Markdown editor">
-          <div class="panel-header">
-            <h2>Markdown</h2>
-            <div class="panel-actions">
-              <button class="ghost" data-action="bold"><strong>B</strong></button>
-              <button class="ghost" data-action="italic"><em>I</em></button>
-              <button class="ghost" data-action="code">&lt;/&gt;</button>
-              <button class="ghost" data-action="quote">“”</button>
-              <button class="ghost" data-action="list">• List</button>
-            </div>
+      <!-- ─── Toolbar ─── -->
+      <div class="toolbar" role="toolbar" aria-label="Formatting tools">
+        <div class="toolbar-group">
+          <button class="tool-btn" data-action="h1" title="Heading 1">H1</button>
+          <button class="tool-btn" data-action="h2" title="Heading 2">H2</button>
+          <button class="tool-btn" data-action="h3" title="Heading 3">H3</button>
+        </div>
+        <span class="toolbar-sep"></span>
+        <div class="toolbar-group">
+          <button class="tool-btn" data-action="bold" title="Bold (Ctrl+B)"><strong>B</strong></button>
+          <button class="tool-btn" data-action="italic" title="Italic (Ctrl+I)"><em>I</em></button>
+          <button class="tool-btn" data-action="strikethrough" title="Strikethrough"><s>S</s></button>
+        </div>
+        <span class="toolbar-sep"></span>
+        <div class="toolbar-group">
+          <button class="tool-btn" data-action="code" title="Inline code">&lt;/&gt;</button>
+          <button class="tool-btn" data-action="codeblock" title="Code block">{ }</button>
+          <button class="tool-btn" data-action="quote" title="Blockquote">"</button>
+        </div>
+        <span class="toolbar-sep"></span>
+        <div class="toolbar-group">
+          <button class="tool-btn" data-action="ul" title="Bullet list">• List</button>
+          <button class="tool-btn" data-action="ol" title="Numbered list">1. List</button>
+          <button class="tool-btn" data-action="task" title="Task list">☑ Task</button>
+        </div>
+        <span class="toolbar-sep"></span>
+        <div class="toolbar-group">
+          <button class="tool-btn" data-action="link" title="Insert link">🔗</button>
+          <button class="tool-btn" data-action="image" title="Insert image">🖼</button>
+          <button class="tool-btn" data-action="table" title="Insert table">⊞</button>
+          <button class="tool-btn" data-action="hr" title="Horizontal rule">—</button>
+        </div>
+      </div>
+
+      <!-- ─── Workspace ─── -->
+      <main class="workspace" data-view="split">
+        <!-- Table of Contents sidebar (hidden by default) -->
+        <aside class="toc-sidebar" id="toc-sidebar" aria-label="Table of Contents">
+          <div class="toc-header">
+            <h3>Table of Contents</h3>
+            <button class="icon-btn icon-btn-sm" id="close-toc" title="Close">&times;</button>
           </div>
-          <textarea id="markdown-input" spellcheck="true"></textarea>
+          <nav id="toc-list" class="toc-list"></nav>
+        </aside>
+
+        <section class="editor-pane" aria-label="Markdown editor">
+          <div class="pane-label">
+            <span class="pane-label-dot editor-dot"></span> Markdown
+          </div>
+          <div class="editor-wrap">
+            <div class="line-numbers" id="line-numbers" aria-hidden="true"></div>
+            <textarea
+              id="markdown-input"
+              spellcheck="true"
+              placeholder="Start writing markdown…"
+            ></textarea>
+          </div>
         </section>
 
-        <section class="preview" aria-label="Markdown preview">
-          <div class="panel-header">
-            <h2>Preview</h2>
-            <div class="panel-actions">
-              <button class="ghost" id="clear-preview">Clear</button>
-            </div>
+        <div class="gutter" id="gutter" title="Drag to resize"></div>
+
+        <section class="preview-pane" aria-label="Markdown preview">
+          <div class="pane-label">
+            <span class="pane-label-dot preview-dot"></span> Preview
           </div>
           <article id="markdown-preview" class="preview-content"></article>
         </section>
       </main>
 
-      <footer class="app-footer">
-        <div>
-          Tips: Use <kbd>⌘/Ctrl + S</kbd> to download, <kbd>⌘/Ctrl + Enter</kbd> to toggle focus.
+      <!-- ─── Status Bar ─── -->
+      <footer class="status-bar">
+        <div class="status-left">
+          <span id="stat-lines">0 lines</span>
+          <span class="status-sep">·</span>
+          <span id="stat-words">0 words</span>
+          <span class="status-sep">·</span>
+          <span id="stat-chars">0 chars</span>
+          <span class="status-sep">·</span>
+          <span id="stat-cursor">Ln 1, Col 1</span>
         </div>
-        <button class="secondary" id="download-md">Download .md</button>
+        <div class="status-center">
+          <span id="save-status">Unsaved</span>
+        </div>
+        <div class="status-right">
+          <kbd>Ctrl+S</kbd> Save
+          <span class="status-sep">·</span>
+          <kbd>Ctrl+B</kbd> Bold
+          <span class="status-sep">·</span>
+          <button class="link-btn" id="download-md">↓ Download .md</button>
+          <span class="status-sep">·</span>
+          <button class="link-btn" id="download-html">↓ Download .html</button>
+        </div>
       </footer>
+    </div>
+
+    <!-- ─── Drop overlay ─── -->
+    <div class="drop-overlay" id="drop-overlay">
+      <div class="drop-overlay-inner">Drop your .md or .txt file here</div>
     </div>
 
     <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/dompurify@3.0.6/dist/purify.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/gh/highlightjs/cdn-release@11.9.0/build/highlight.min.js"></script>
     <script src="app.js"></script>
   </body>
 </html>
