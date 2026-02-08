@@ -3,8 +3,6 @@ const preview = document.getElementById("markdown-preview");
 const copyButton = document.getElementById("copy-markdown");
 const downloadButton = document.getElementById("download-md");
 const clearButton = document.getElementById("clear-preview");
-const statusMessage = document.getElementById("status-message");
-const runChecksButton = document.getElementById("run-checks");
 
 const defaultMarkdown = `# Welcome to HedgeDoc Workspace
 
@@ -30,11 +28,6 @@ marked.setOptions({
   breaks: true,
   renderer,
 });
-
-const setStatus = (message, tone = "muted") => {
-  statusMessage.textContent = message;
-  statusMessage.dataset.tone = tone;
-};
 
 const updatePreview = () => {
   const raw = input.value;
@@ -70,30 +63,15 @@ const insertLinePrefix = (prefix) => {
 
 input.value = defaultMarkdown;
 updatePreview();
-setStatus("Preview ready");
 
 input.addEventListener("input", updatePreview);
 
 copyButton.addEventListener("click", async () => {
-  try {
-    if (navigator.clipboard?.writeText) {
-      await navigator.clipboard.writeText(input.value);
-    } else {
-      const fallback = document.createElement("textarea");
-      fallback.value = input.value;
-      document.body.appendChild(fallback);
-      fallback.select();
-      document.execCommand("copy");
-      document.body.removeChild(fallback);
-    }
-    copyButton.textContent = "Copied!";
-    setStatus("Markdown copied to clipboard.", "success");
-    setTimeout(() => {
-      copyButton.textContent = "Copy Markdown";
-    }, 1500);
-  } catch (error) {
-    setStatus("Clipboard failed. Please copy manually.", "error");
-  }
+  await navigator.clipboard.writeText(input.value);
+  copyButton.textContent = "Copied!";
+  setTimeout(() => {
+    copyButton.textContent = "Copy Markdown";
+  }, 1500);
 });
 
 downloadButton.addEventListener("click", () => {
@@ -112,25 +90,6 @@ clearButton.addEventListener("click", () => {
   input.value = "";
   updatePreview();
   input.focus();
-  setStatus("Editor cleared.", "muted");
-});
-
-runChecksButton.addEventListener("click", () => {
-  const checks = [
-    { name: "Marked loaded", pass: typeof marked !== "undefined" },
-    { name: "DOMPurify loaded", pass: typeof DOMPurify !== "undefined" },
-    { name: "Preview element", pass: !!preview },
-    { name: "Clipboard API", pass: !!navigator.clipboard?.writeText },
-  ];
-  const failed = checks.filter((check) => !check.pass);
-  if (failed.length === 0) {
-    setStatus("All checks passed.", "success");
-  } else {
-    setStatus(
-      `Checks failed: ${failed.map((check) => check.name).join(", ")}`,
-      "error"
-    );
-  }
 });
 
 document.querySelectorAll("[data-action]").forEach((button) => {
@@ -165,10 +124,6 @@ document.addEventListener("keydown", (event) => {
 
   if ((event.metaKey || event.ctrlKey) && event.key === "Enter") {
     event.preventDefault();
-    if (document.activeElement === input) {
-      preview.focus();
-    } else {
-      input.focus();
-    }
+    input.focus();
   }
 });
