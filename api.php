@@ -2,8 +2,14 @@
 /**
  * HedgeDoc Notes – REST API
  *
- * Endpoints:
- *   GET  ?action=list              → all notes (metadata only)
+ * Auth Endpoints:
+ *   POST { action: "register", username, email, password }
+ *   POST { action: "login", email, password }
+ *   POST { action: "logout" }
+ *   GET  ?action=session                → current user info
+ *
+ * Note Endpoints (require authentication):
+ *   GET  ?action=list              → all notes for current user
  *   GET  ?action=get&id=...        → single note with content
  *   POST { action: "create", ... } → create note
  *   POST { action: "update", ... } → update note
@@ -13,12 +19,17 @@
 
 require_once __DIR__ . '/config.php';
 
+// ── Session ───────────────────────────────────────
+
+session_start();
+
 header('Content-Type: application/json; charset=utf-8');
 
 // Allow same-origin requests
 header('Access-Control-Allow-Origin: *');
 header('Access-Control-Allow-Methods: GET, POST, OPTIONS');
 header('Access-Control-Allow-Headers: Content-Type');
+header('Access-Control-Allow-Credentials: true');
 
 if ($_SERVER['REQUEST_METHOD'] === 'OPTIONS') {
     http_response_code(204);
@@ -35,6 +46,22 @@ if ($db->connect_error) {
 
 $db->set_charset(DB_CHARSET);
 
+// ── Helper: get current user ID from session ──────
+
+function getCurrentUserId(): ?int
+{
+    return $_SESSION['user_id'] ?? null;
+}
+
+function requireAuth(): int
+{
+    $userId = getCurrentUserId();
+    if (!$userId) {
+        jsonError('Nicht angemeldet', 401);
+    }
+    return $userId;
+}
+
 // ── Routing ────────────────────────────────────────
 
 $method = $_SERVER['REQUEST_METHOD'];
@@ -43,11 +70,16 @@ if ($method === 'GET') {
     $action = $_GET['action'] ?? '';
 
     switch ($action) {
+        case 'session':
+            getSession();
+            break;
         case 'list':
-            listNotes($db);
+            $userId = requireAuth();
+            listNotes($db, $userId);
             break;
         case 'get':
-            getNote($db, $_GET['id'] ?? '');
+            $userId = requireAuth();
+            getNote($db, $userId, $_GET['id'] ?? '');
             break;
         default:
             jsonError('Unknown action', 400);
@@ -60,17 +92,33 @@ if ($method === 'GET') {
     }
 
     switch ($body['action']) {
+        // Auth actions (no auth required)
+        case 'register':
+            registerUser($db, $body);
+            break;
+        case 'login':
+            loginUser($db, $body);
+            break;
+        case 'logout':
+            logoutUser();
+            break;
+
+        // Note actions (auth required)
         case 'create':
-            createNote($db, $body);
+            $userId = requireAuth();
+            createNote($db, $userId, $body);
             break;
         case 'update':
-            updateNote($db, $body);
+            $userId = requireAuth();
+            updateNote($db, $userId, $body);
             break;
         case 'delete':
-            deleteNote($db, $body);
+            $userId = requireAuth();
+            deleteNote($db, $userId, $body);
             break;
         case 'togglePin':
-            togglePin($db, $body);
+            $userId = requireAuth();
+            togglePin($db, $userId, $body);
             break;
         default:
             jsonError('Unknown action', 400);
@@ -81,9 +129,142 @@ if ($method === 'GET') {
 
 $db->close();
 
-// ── Handlers ───────────────────────────────────────
+// ══════════════════════════════════════════════════
+//  Auth Handlers
+// ══════════════════════════════════════════════════
 
-function listNotes(mysqli $db): void
+function registerUser(mysqli $db, array $body): void
+{
+    $username = trim($body['username'] ?? '');
+    $email = trim($body['email'] ?? '');
+    $password = $body['password'] ?? '';
+
+    if ($username === '' || $email === '' || $password === '') {
+        jsonError('Alle Felder sind erforderlich', 400);
+    }
+
+    if (mb_strlen($username) < 3 || mb_strlen($username) > 50) {
+        jsonError('Benutzername muss zwischen 3 und 50 Zeichen lang sein', 400);
+    }
+
+    if (!filter_var($email, FILTER_VALIDATE_EMAIL)) {
+        jsonError('Ungültige E-Mail-Adresse', 400);
+    }
+
+    if (mb_strlen($password) < 6) {
+        jsonError('Passwort muss mindestens 6 Zeichen lang sein', 400);
+    }
+
+    // Check if username or email already exists
+    $stmt = $db->prepare("SELECT id FROM users WHERE username = ? OR email = ?");
+    $stmt->bind_param('ss', $username, $email);
+    $stmt->execute();
+    $result = $stmt->get_result();
+
+    if ($result->num_rows > 0) {
+        $stmt->close();
+        jsonError('Benutzername oder E-Mail bereits vergeben', 409);
+    }
+    $stmt->close();
+
+    $passwordHash = password_hash($password, PASSWORD_DEFAULT);
+
+    $stmt = $db->prepare("INSERT INTO users (username, email, password_hash) VALUES (?, ?, ?)");
+    $stmt->bind_param('sss', $username, $email, $passwordHash);
+
+    if (!$stmt->execute()) {
+        $stmt->close();
+        jsonError('Registrierung fehlgeschlagen', 500);
+    }
+
+    $userId = (int) $stmt->insert_id;
+    $stmt->close();
+
+    // Auto-login after registration
+    $_SESSION['user_id'] = $userId;
+    $_SESSION['username'] = $username;
+
+    jsonSuccess([
+        'id' => $userId,
+        'username' => $username,
+        'email' => $email,
+    ]);
+}
+
+function loginUser(mysqli $db, array $body): void
+{
+    $email = trim($body['email'] ?? '');
+    $password = $body['password'] ?? '';
+
+    if ($email === '' || $password === '') {
+        jsonError('E-Mail und Passwort sind erforderlich', 400);
+    }
+
+    $stmt = $db->prepare("SELECT id, username, email, password_hash FROM users WHERE email = ?");
+    $stmt->bind_param('s', $email);
+    $stmt->execute();
+    $result = $stmt->get_result();
+    $user = $result->fetch_assoc();
+    $stmt->close();
+
+    if (!$user || !password_verify($password, $user['password_hash'])) {
+        jsonError('Ungültige Anmeldedaten', 401);
+    }
+
+    // Regenerate session to prevent fixation
+    session_regenerate_id(true);
+
+    $_SESSION['user_id'] = (int) $user['id'];
+    $_SESSION['username'] = $user['username'];
+
+    jsonSuccess([
+        'id' => (int) $user['id'],
+        'username' => $user['username'],
+        'email' => $user['email'],
+    ]);
+}
+
+function logoutUser(): void
+{
+    $_SESSION = [];
+
+    if (ini_get('session.use_cookies')) {
+        $params = session_get_cookie_params();
+        setcookie(
+            session_name(),
+            '',
+            time() - 42000,
+            $params['path'],
+            $params['domain'],
+            $params['secure'],
+            $params['httponly']
+        );
+    }
+
+    session_destroy();
+
+    jsonSuccess(['loggedOut' => true]);
+}
+
+function getSession(): void
+{
+    $userId = getCurrentUserId();
+    if (!$userId) {
+        jsonSuccess(null);
+        return;
+    }
+
+    jsonSuccess([
+        'id' => $userId,
+        'username' => $_SESSION['username'] ?? '',
+    ]);
+}
+
+// ══════════════════════════════════════════════════
+//  Note Handlers
+// ══════════════════════════════════════════════════
+
+function listNotes(mysqli $db, int $userId): void
 {
     $search = trim($_GET['q'] ?? '');
 
@@ -91,17 +272,20 @@ function listNotes(mysqli $db): void
         $stmt = $db->prepare(
             "SELECT id, title, content, pinned, created, lastAccessed, updated
              FROM notes
-             WHERE title LIKE CONCAT('%', ?, '%') OR content LIKE CONCAT('%', ?, '%')
+             WHERE user_id = ? AND (title LIKE CONCAT('%', ?, '%') OR content LIKE CONCAT('%', ?, '%'))
              ORDER BY pinned DESC, lastAccessed DESC"
         );
-        $stmt->bind_param('ss', $search, $search);
+        $stmt->bind_param('iss', $userId, $search, $search);
         $stmt->execute();
         $result = $stmt->get_result();
     } else {
-        $result = $db->query(
+        $stmt = $db->prepare(
             "SELECT id, title, content, pinned, created, lastAccessed, updated
-             FROM notes ORDER BY pinned DESC, lastAccessed DESC"
+             FROM notes WHERE user_id = ? ORDER BY pinned DESC, lastAccessed DESC"
         );
+        $stmt->bind_param('i', $userId);
+        $stmt->execute();
+        $result = $stmt->get_result();
     }
 
     $notes = [];
@@ -113,23 +297,21 @@ function listNotes(mysqli $db): void
         $notes[] = $row;
     }
 
-    if (isset($stmt)) {
-        $stmt->close();
-    }
+    $stmt->close();
 
     jsonSuccess($notes);
 }
 
-function getNote(mysqli $db, string $id): void
+function getNote(mysqli $db, int $userId, string $id): void
 {
     if (!$id) {
         jsonError('Missing id', 400);
     }
 
     $stmt = $db->prepare(
-        "SELECT id, title, content, pinned, created, lastAccessed, updated FROM notes WHERE id = ?"
+        "SELECT id, title, content, pinned, created, lastAccessed, updated FROM notes WHERE id = ? AND user_id = ?"
     );
-    $stmt->bind_param('s', $id);
+    $stmt->bind_param('si', $id, $userId);
     $stmt->execute();
     $result = $stmt->get_result();
     $note = $result->fetch_assoc();
@@ -144,8 +326,8 @@ function getNote(mysqli $db, string $id): void
 
     // Update lastAccessed
     $now = gmdate('Y-m-d H:i:s');
-    $upd = $db->prepare("UPDATE notes SET lastAccessed = ? WHERE id = ?");
-    $upd->bind_param('ss', $now, $id);
+    $upd = $db->prepare("UPDATE notes SET lastAccessed = ? WHERE id = ? AND user_id = ?");
+    $upd->bind_param('ssi', $now, $id, $userId);
     $upd->execute();
     $upd->close();
 
@@ -154,7 +336,7 @@ function getNote(mysqli $db, string $id): void
     jsonSuccess($note);
 }
 
-function createNote(mysqli $db, array $body): void
+function createNote(mysqli $db, int $userId, array $body): void
 {
     $content = $body['content'] ?? "# Neue Notiz\n\nSchreibe hier deinen Text...\n";
     $title = $body['title'] ?? extractTitle($content);
@@ -163,9 +345,9 @@ function createNote(mysqli $db, array $body): void
     $pinned = 0;
 
     $stmt = $db->prepare(
-        "INSERT INTO notes (id, title, content, pinned, created, lastAccessed) VALUES (?, ?, ?, ?, ?, ?)"
+        "INSERT INTO notes (id, user_id, title, content, pinned, created, lastAccessed) VALUES (?, ?, ?, ?, ?, ?, ?)"
     );
-    $stmt->bind_param('sssiss', $id, $title, $content, $pinned, $now, $now);
+    $stmt->bind_param('sississ', $id, $userId, $title, $content, $pinned, $now, $now);
 
     if (!$stmt->execute()) {
         $stmt->close();
@@ -183,7 +365,7 @@ function createNote(mysqli $db, array $body): void
     ]);
 }
 
-function updateNote(mysqli $db, array $body): void
+function updateNote(mysqli $db, int $userId, array $body): void
 {
     $id = $body['id'] ?? '';
     if (!$id) {
@@ -201,14 +383,14 @@ function updateNote(mysqli $db, array $body): void
     $now = gmdate('Y-m-d H:i:s');
 
     if ($content !== null && $title !== null) {
-        $stmt = $db->prepare("UPDATE notes SET title = ?, content = ?, lastAccessed = ? WHERE id = ?");
-        $stmt->bind_param('ssss', $title, $content, $now, $id);
+        $stmt = $db->prepare("UPDATE notes SET title = ?, content = ?, lastAccessed = ? WHERE id = ? AND user_id = ?");
+        $stmt->bind_param('ssssi', $title, $content, $now, $id, $userId);
     } elseif ($title !== null) {
-        $stmt = $db->prepare("UPDATE notes SET title = ?, lastAccessed = ? WHERE id = ?");
-        $stmt->bind_param('sss', $title, $now, $id);
+        $stmt = $db->prepare("UPDATE notes SET title = ?, lastAccessed = ? WHERE id = ? AND user_id = ?");
+        $stmt->bind_param('sssi', $title, $now, $id, $userId);
     } else {
-        $stmt = $db->prepare("UPDATE notes SET lastAccessed = ? WHERE id = ?");
-        $stmt->bind_param('ss', $now, $id);
+        $stmt = $db->prepare("UPDATE notes SET lastAccessed = ? WHERE id = ? AND user_id = ?");
+        $stmt->bind_param('ssi', $now, $id, $userId);
     }
 
     if (!$stmt->execute()) {
@@ -225,36 +407,36 @@ function updateNote(mysqli $db, array $body): void
     jsonSuccess(['id' => $id, 'title' => $title, 'lastAccessed' => $now]);
 }
 
-function deleteNote(mysqli $db, array $body): void
+function deleteNote(mysqli $db, int $userId, array $body): void
 {
     $id = $body['id'] ?? '';
     if (!$id) {
         jsonError('Missing id', 400);
     }
 
-    $stmt = $db->prepare("DELETE FROM notes WHERE id = ?");
-    $stmt->bind_param('s', $id);
+    $stmt = $db->prepare("DELETE FROM notes WHERE id = ? AND user_id = ?");
+    $stmt->bind_param('si', $id, $userId);
     $stmt->execute();
     $stmt->close();
 
     jsonSuccess(['deleted' => true]);
 }
 
-function togglePin(mysqli $db, array $body): void
+function togglePin(mysqli $db, int $userId, array $body): void
 {
     $id = $body['id'] ?? '';
     if (!$id) {
         jsonError('Missing id', 400);
     }
 
-    $stmt = $db->prepare("UPDATE notes SET pinned = NOT pinned WHERE id = ?");
-    $stmt->bind_param('s', $id);
+    $stmt = $db->prepare("UPDATE notes SET pinned = NOT pinned WHERE id = ? AND user_id = ?");
+    $stmt->bind_param('si', $id, $userId);
     $stmt->execute();
     $stmt->close();
 
     // Return new state
-    $stmt = $db->prepare("SELECT pinned FROM notes WHERE id = ?");
-    $stmt->bind_param('s', $id);
+    $stmt = $db->prepare("SELECT pinned FROM notes WHERE id = ? AND user_id = ?");
+    $stmt->bind_param('si', $id, $userId);
     $stmt->execute();
     $result = $stmt->get_result();
     $row = $result->fetch_assoc();
