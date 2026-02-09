@@ -108,6 +108,7 @@ function listNotes(mysqli $db): void
     while ($row = $result->fetch_assoc()) {
         $row['pinned'] = (bool) $row['pinned'];
         $row['preview'] = makePreview($row['content']);
+        $row['tags'] = extractTags($row['content']);
         unset($row['content']);
         $notes[] = $row;
     }
@@ -139,6 +140,7 @@ function getNote(mysqli $db, string $id): void
     }
 
     $note['pinned'] = (bool) $note['pinned'];
+    $note['tags'] = extractTags($note['content']);
 
     // Update lastAccessed
     $now = gmdate('Y-m-d H:i:s');
@@ -267,10 +269,18 @@ function togglePin(mysqli $db, array $body): void
 
 // ── Helpers ────────────────────────────────────────
 
+function stripFrontMatter(string $markdown): string
+{
+    // Remove YAML front matter block (--- ... ---)
+    return preg_replace('/\A---\s*\n.*?\n---\s*\n?/s', '', $markdown);
+}
+
 function makePreview(string $markdown): string
 {
+    // Strip front matter first
+    $text = stripFrontMatter($markdown);
     // Strip markdown syntax for a plain-text excerpt
-    $text = preg_replace('/^#{1,6}\s+/m', '', $markdown);
+    $text = preg_replace('/^#{1,6}\s+/m', '', $text);
     $text = preg_replace('/\*{1,2}([^*]+)\*{1,2}/', '$1', $text);
     $text = preg_replace('/~~([^~]+)~~/', '$1', $text);
     $text = preg_replace('/`([^`]+)`/', '$1', $text);
@@ -291,18 +301,58 @@ function generateId(): string
 
 function extractTitle(string $markdown): string
 {
+    // Strip front matter before looking for title
+    $body = stripFrontMatter($markdown);
     // First H1 heading
-    if (preg_match('/^#\s+(.+)$/m', $markdown, $m)) {
+    if (preg_match('/^#\s+(.+)$/m', $body, $m)) {
         return mb_substr(trim($m[1]), 0, 255);
     }
     // Fallback: first non-empty line
-    foreach (explode("\n", $markdown) as $line) {
+    foreach (explode("\n", $body) as $line) {
         $trimmed = trim($line);
         if ($trimmed !== '') {
             return mb_substr($trimmed, 0, 60);
         }
     }
     return 'Unbenannte Notiz';
+}
+
+function extractTags(string $markdown): array
+{
+    // Match YAML front matter block
+    if (!preg_match('/\A---\s*\n(.*?)\n---/s', $markdown, $fm)) {
+        return [];
+    }
+    $frontMatter = $fm[1];
+
+    // Try inline format: tags: tag1, tag2, tag3
+    if (preg_match('/^tags:\s*(.+)$/m', $frontMatter, $m)) {
+        $value = trim($m[1]);
+        // Check if it's not a YAML list start (just a dash)
+        if ($value !== '' && $value[0] !== '-') {
+            return array_values(array_filter(array_map('trim', explode(',', $value))));
+        }
+    }
+
+    // Try YAML list format:
+    // tags:
+    //   - tag1
+    //   - tag2
+    if (preg_match('/^tags:\s*\n((?:\s+-\s+.+\n?)+)/m', $frontMatter, $m)) {
+        $lines = explode("\n", trim($m[1]));
+        $tags = [];
+        foreach ($lines as $line) {
+            if (preg_match('/^\s+-\s+(.+)$/', $line, $t)) {
+                $tag = trim($t[1]);
+                if ($tag !== '') {
+                    $tags[] = $tag;
+                }
+            }
+        }
+        return $tags;
+    }
+
+    return [];
 }
 
 function jsonSuccess($data): void

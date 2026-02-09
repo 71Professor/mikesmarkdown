@@ -41,6 +41,9 @@
   const btnNewNoteEmpty = $("#btn-new-note-empty");
   const btnBackOverview = $("#btn-back-overview");
 
+  // Tag filter refs
+  const tagFilterBar = $("#tag-filter-bar");
+
   // Delete modal refs
   const deleteModal = $("#delete-modal");
   const deleteModalText = $("#delete-modal-text");
@@ -62,6 +65,7 @@
   let currentSort = localStorage.getItem(SORT_KEY) || "lastAccessed";
   let deleteTargetId = null;
   let cachedNotes = []; // cached list for client-side sorting
+  let activeTagFilter = null; // currently selected tag for filtering
 
   // ── Marked configuration ──────────────────────────
   const renderer = new marked.Renderer();
@@ -167,8 +171,28 @@
       return;
     }
 
+    // Collect all unique tags for the filter bar
+    const allTags = new Set();
+    cachedNotes.forEach((doc) => {
+      (doc.tags || []).forEach((tag) => allTags.add(tag));
+    });
+    renderTagFilterBar(allTags);
+
+    // If a tag filter no longer exists in the data, clear it
+    if (activeTagFilter && !allTags.has(activeTagFilter)) {
+      activeTagFilter = null;
+    }
+
+    // Apply tag filter
+    let filtered = cachedNotes;
+    if (activeTagFilter) {
+      filtered = cachedNotes.filter((doc) =>
+        (doc.tags || []).includes(activeTagFilter)
+      );
+    }
+
     // Client-side sort (server returns pinned-first, lastAccessed desc by default)
-    const sorted = [...cachedNotes].sort((a, b) => {
+    const sorted = [...filtered].sort((a, b) => {
       if (a.pinned && !b.pinned) return -1;
       if (!a.pinned && b.pinned) return 1;
 
@@ -197,6 +221,10 @@
         card.className = "note-card" + (doc.pinned ? " pinned" : "");
         card.dataset.id = doc.id;
 
+        const tagsHtml = (doc.tags || []).length
+          ? `<div class="note-card-tags">${(doc.tags || []).map((t) => `<span class="tag-chip" data-tag="${escapeHtml(t)}">${escapeHtml(t)}</span>`).join("")}</div>`
+          : "";
+
         card.innerHTML = `
           <div class="note-card-header">
             <div class="note-card-title">${escapeHtml(doc.title)}</div>
@@ -210,6 +238,7 @@
             </div>
           </div>
           ${doc.preview ? `<div class="note-card-preview">${escapeHtml(doc.preview)}</div>` : ""}
+          ${tagsHtml}
           <div class="note-card-meta">
             <span>&#128197; Erstellt: ${formatDate(doc.created)}</span>
             <span>&#128338; Zuletzt: ${formatDate(doc.lastAccessed)}</span>
@@ -219,7 +248,17 @@
         // Click card to open
         card.addEventListener("click", (e) => {
           if (e.target.closest("[data-action]")) return;
+          if (e.target.closest(".tag-chip")) return;
           openDocument(doc.id);
+        });
+
+        // Tag chips on card → set filter
+        card.querySelectorAll(".tag-chip").forEach((chip) => {
+          chip.addEventListener("click", (e) => {
+            e.stopPropagation();
+            activeTagFilter = activeTagFilter === chip.dataset.tag ? null : chip.dataset.tag;
+            renderOverview();
+          });
         });
 
         // Pin button
@@ -242,6 +281,28 @@
         notesGrid.appendChild(card);
       });
     }
+  }
+
+  function renderTagFilterBar(allTags) {
+    tagFilterBar.innerHTML = "";
+    if (allTags.size === 0) {
+      tagFilterBar.style.display = "none";
+      return;
+    }
+    tagFilterBar.style.display = "";
+
+    const sortedTags = [...allTags].sort((a, b) => a.localeCompare(b, "de"));
+
+    sortedTags.forEach((tag) => {
+      const btn = document.createElement("button");
+      btn.className = "tag-filter-chip" + (activeTagFilter === tag ? " active" : "");
+      btn.textContent = tag;
+      btn.addEventListener("click", () => {
+        activeTagFilter = activeTagFilter === tag ? null : tag;
+        renderOverview();
+      });
+      tagFilterBar.appendChild(btn);
+    });
   }
 
   function escapeHtml(str) {
@@ -376,8 +437,12 @@
   }
 
   // ── Markdown → HTML ───────────────────────────────
+  function stripFrontMatter(text) {
+    return text.replace(/^---\s*\n[\s\S]*?\n---\s*\n?/, "");
+  }
+
   function updatePreview() {
-    const raw = input.value;
+    const raw = stripFrontMatter(input.value);
     const html = marked.parse(raw);
     preview.innerHTML = DOMPurify.sanitize(html);
     updateToc();
