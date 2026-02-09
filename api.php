@@ -19,21 +19,57 @@
 
 require_once __DIR__ . '/config.php';
 
-// ── Session ───────────────────────────────────────
+// ── Session (hardened cookie settings) ────────────
+
+ini_set('session.cookie_httponly', '1');
+ini_set('session.cookie_samesite', 'Strict');
+ini_set('session.use_strict_mode', '1');
+if (!empty($_SERVER['HTTPS']) && $_SERVER['HTTPS'] !== 'off') {
+    ini_set('session.cookie_secure', '1');
+}
 
 session_start();
 
+// ── Security headers ──────────────────────────────
+
 header('Content-Type: application/json; charset=utf-8');
+header('X-Content-Type-Options: nosniff');
+header('X-Frame-Options: DENY');
+header('Referrer-Policy: strict-origin-when-cross-origin');
 
-// Allow same-origin requests
-header('Access-Control-Allow-Origin: *');
-header('Access-Control-Allow-Methods: GET, POST, OPTIONS');
-header('Access-Control-Allow-Headers: Content-Type');
-header('Access-Control-Allow-Credentials: true');
-
+// CORS: only allow same-origin (no cross-origin requests needed for this SPA)
+// If cross-origin is required, replace '*' with the specific allowed origin.
 if ($_SERVER['REQUEST_METHOD'] === 'OPTIONS') {
     http_response_code(204);
     exit;
+}
+
+// ── Rate limiting (session-based, per IP) ─────────
+
+function checkRateLimit(string $action, int $maxAttempts = 5, int $windowSeconds = 300): void
+{
+    $ip = $_SERVER['REMOTE_ADDR'] ?? 'unknown';
+    $key = 'rate_limit_' . $action . '_' . md5($ip);
+
+    if (!isset($_SESSION[$key])) {
+        $_SESSION[$key] = ['count' => 0, 'first_attempt' => time()];
+    }
+
+    $data = &$_SESSION[$key];
+
+    // Reset window if expired
+    if (time() - $data['first_attempt'] > $windowSeconds) {
+        $data['count'] = 0;
+        $data['first_attempt'] = time();
+    }
+
+    $data['count']++;
+
+    if ($data['count'] > $maxAttempts) {
+        $retryAfter = $data['first_attempt'] + $windowSeconds - time();
+        header('Retry-After: ' . $retryAfter);
+        jsonError('Zu viele Versuche. Bitte warten Sie ' . ceil($retryAfter / 60) . ' Minuten.', 429);
+    }
 }
 
 // ── Database connection ────────────────────────────
@@ -135,6 +171,8 @@ $db->close();
 
 function registerUser(mysqli $db, array $body): void
 {
+    checkRateLimit('register', 5, 600); // 5 attempts per 10 minutes
+
     $username = trim($body['username'] ?? '');
     $email = trim($body['email'] ?? '');
     $password = $body['password'] ?? '';
@@ -193,6 +231,8 @@ function registerUser(mysqli $db, array $body): void
 
 function loginUser(mysqli $db, array $body): void
 {
+    checkRateLimit('login', 5, 300); // 5 attempts per 5 minutes
+
     $email = trim($body['email'] ?? '');
     $password = $body['password'] ?? '';
 
