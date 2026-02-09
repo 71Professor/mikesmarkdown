@@ -10,7 +10,20 @@
   const $ = (sel) => document.querySelector(sel);
   const $$ = (sel) => document.querySelectorAll(sel);
 
-  const app = $(".app");
+  // Auth refs
+  const authPage = $("#auth-page");
+  const mainApp = $("#main-app");
+  const loginForm = $("#login-form");
+  const registerForm = $("#register-form");
+  const loginError = $("#login-error");
+  const registerError = $("#register-error");
+  const showRegisterBtn = $("#show-register");
+  const showLoginBtn = $("#show-login");
+  const userGreeting = $("#user-greeting");
+  const btnLogout = $("#btn-logout");
+
+  // App refs
+  const app = mainApp;
   const input = $("#markdown-input");
   const preview = $("#markdown-preview");
   const workspace = $(".workspace");
@@ -57,6 +70,7 @@
   const SORT_KEY = "hedgedoc_sort";
 
   // ── State ─────────────────────────────────────────
+  let currentUser = null;
   let currentDocId = null;
   let saveTimeout = null;
   let scrollSyncEnabled = true;
@@ -111,9 +125,14 @@
     for (const [k, v] of Object.entries(params)) {
       url.searchParams.set(k, v);
     }
-    const res = await fetch(url);
+    const res = await fetch(url, { credentials: "same-origin" });
     const json = await res.json();
-    if (!json.success) throw new Error(json.error || "API error");
+    if (!json.success) {
+      if (res.status === 401) {
+        handleSessionExpired();
+      }
+      throw new Error(json.error || "API error");
+    }
     return json.data;
   }
 
@@ -122,10 +141,22 @@
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ action, ...data }),
+      credentials: "same-origin",
     });
     const json = await res.json();
-    if (!json.success) throw new Error(json.error || "API error");
+    if (!json.success) {
+      if (res.status === 401 && action !== "login" && action !== "register") {
+        handleSessionExpired();
+      }
+      throw new Error(json.error || "API error");
+    }
     return json.data;
+  }
+
+  function handleSessionExpired() {
+    currentUser = null;
+    authPage.style.display = "";
+    mainApp.style.display = "none";
   }
 
   function extractTitle(markdown) {
@@ -137,6 +168,92 @@
       if (trimmed) return trimmed.slice(0, 60);
     }
     return "Unbenannte Notiz";
+  }
+
+  // ══════════════════════════════════════════════════
+  //  Authentication
+  // ══════════════════════════════════════════════════
+
+  function showAuthError(el, message) {
+    el.textContent = message;
+    el.style.display = "";
+  }
+
+  function hideAuthError(el) {
+    el.textContent = "";
+    el.style.display = "none";
+  }
+
+  async function checkSession() {
+    try {
+      const data = await apiGet("session");
+      if (data) {
+        currentUser = data;
+        showApp();
+      } else {
+        showAuth();
+      }
+    } catch (err) {
+      showAuth();
+    }
+  }
+
+  function showAuth() {
+    authPage.style.display = "";
+    mainApp.style.display = "none";
+  }
+
+  function showApp() {
+    authPage.style.display = "none";
+    mainApp.style.display = "";
+    userGreeting.textContent = currentUser.username;
+    startApp();
+  }
+
+  async function handleLogin(e) {
+    e.preventDefault();
+    hideAuthError(loginError);
+
+    const email = $("#login-email").value.trim();
+    const password = $("#login-password").value;
+
+    try {
+      const data = await apiPost("login", { email, password });
+      currentUser = data;
+      loginForm.reset();
+      showApp();
+    } catch (err) {
+      showAuthError(loginError, err.message);
+    }
+  }
+
+  async function handleRegister(e) {
+    e.preventDefault();
+    hideAuthError(registerError);
+
+    const username = $("#register-username").value.trim();
+    const email = $("#register-email").value.trim();
+    const password = $("#register-password").value;
+
+    try {
+      const data = await apiPost("register", { username, email, password });
+      currentUser = data;
+      registerForm.reset();
+      showApp();
+    } catch (err) {
+      showAuthError(registerError, err.message);
+    }
+  }
+
+  async function handleLogout() {
+    try {
+      await apiPost("logout");
+    } catch (_) {
+      // ignore errors
+    }
+    currentUser = null;
+    currentDocId = null;
+    showAuth();
   }
 
   // ══════════════════════════════════════════════════
@@ -868,7 +985,31 @@ ${sanitized}
   //  Event binding
   // ══════════════════════════════════════════════════
 
-  function bindEvents() {
+  function bindAuthEvents() {
+    loginForm.addEventListener("submit", handleLogin);
+    registerForm.addEventListener("submit", handleRegister);
+
+    showRegisterBtn.addEventListener("click", () => {
+      loginForm.style.display = "none";
+      registerForm.style.display = "";
+      hideAuthError(loginError);
+    });
+
+    showLoginBtn.addEventListener("click", () => {
+      registerForm.style.display = "none";
+      loginForm.style.display = "";
+      hideAuthError(registerError);
+    });
+
+    btnLogout.addEventListener("click", handleLogout);
+  }
+
+  let appEventsbound = false;
+
+  function bindAppEvents() {
+    if (appEventsbound) return;
+    appEventsbound = true;
+
     // ── Overview events ─────────────────────────────
     btnNewNote.addEventListener("click", async () => {
       try {
@@ -1012,11 +1153,10 @@ ${sanitized}
   }
 
   // ══════════════════════════════════════════════════
-  //  Init
+  //  Start app after login
   // ══════════════════════════════════════════════════
 
-  function init() {
-    loadTheme();
+  function startApp() {
     loadViewMode();
 
     // Restore sort button state
@@ -1028,7 +1168,17 @@ ${sanitized}
     app.setAttribute("data-page", "overview");
     renderOverview();
 
-    bindEvents();
+    bindAppEvents();
+  }
+
+  // ══════════════════════════════════════════════════
+  //  Init
+  // ══════════════════════════════════════════════════
+
+  function init() {
+    loadTheme();
+    bindAuthEvents();
+    checkSession();
   }
 
   init();
