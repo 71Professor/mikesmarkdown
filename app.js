@@ -109,6 +109,22 @@
     return `<pre><code${langClass}>${highlighted}</code></pre>`;
   };
 
+  // Custom renderer for task lists with enabled checkboxes
+  renderer.listitem = function(text, task, checked) {
+    if (task) {
+      const checkbox = `<input type="checkbox" ${checked ? 'checked' : ''} data-task="true">`;
+      return `<li class="task-list-item">${checkbox} ${text}</li>`;
+    }
+    return `<li>${text}</li>`;
+  };
+
+  renderer.list = function(body, ordered, start) {
+    const type = ordered ? 'ol' : 'ul';
+    const startatt = (ordered && start !== 1) ? (' start="' + start + '"') : '';
+    const taskListClass = body.includes('data-task="true"') ? ' class="contains-task-list"' : '';
+    return `<${type}${startatt}${taskListClass}>\n${body}</${type}>\n`;
+  };
+
   marked.setOptions({
     gfm: true,
     breaks: true,
@@ -563,6 +579,46 @@
     const html = marked.parse(raw);
     preview.innerHTML = DOMPurify.sanitize(html);
     updateToc();
+    attachTaskCheckboxListeners();
+  }
+
+  // Handle checkbox clicks in task lists
+  function attachTaskCheckboxListeners() {
+    const checkboxes = preview.querySelectorAll('input[type="checkbox"][data-task="true"]');
+    checkboxes.forEach((checkbox, index) => {
+      checkbox.addEventListener('change', (e) => {
+        e.preventDefault();
+        toggleTaskInMarkdown(index, checkbox.checked);
+      });
+    });
+  }
+
+  function toggleTaskInMarkdown(taskIndex, isChecked) {
+    const lines = input.value.split('\n');
+    let currentTaskIndex = 0;
+
+    for (let i = 0; i < lines.length; i++) {
+      const line = lines[i];
+      // Match task list items: - [ ] or - [x] or - [X]
+      const taskMatch = line.match(/^(\s*[-*]\s+)\[([ xX])\](.*)$/);
+
+      if (taskMatch) {
+        if (currentTaskIndex === taskIndex) {
+          // Toggle the checkbox state
+          const prefix = taskMatch[1];
+          const suffix = taskMatch[3];
+          const newState = isChecked ? 'x' : ' ';
+          lines[i] = `${prefix}[${newState}]${suffix}`;
+
+          // Update the editor
+          input.value = lines.join('\n');
+          markDirty();
+          updatePreview();
+          break;
+        }
+        currentTaskIndex++;
+      }
+    }
   }
 
   // ── Line numbers ──────────────────────────────────
