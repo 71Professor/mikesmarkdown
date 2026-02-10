@@ -109,24 +109,6 @@
     return `<pre><code${langClass}>${highlighted}</code></pre>`;
   };
 
-  // Custom renderer for task lists with enabled checkboxes
-  renderer.listitem = function(text, task, checked) {
-    if (task) {
-      const checkbox = `<input type="checkbox" ${checked ? 'checked' : ''} data-task="true">`;
-      return `<li class="task-list-item">${checkbox} ${text}</li>`;
-    }
-    return `<li>${text}</li>`;
-  };
-
-  renderer.list = function(body, ordered, start) {
-    const type = ordered ? 'ol' : 'ul';
-    const startatt = (ordered && start !== 1) ? (' start="' + start + '"') : '';
-    // Convert body to string if it's an object/token
-    const bodyStr = typeof body === 'string' ? body : String(body);
-    const taskListClass = bodyStr.includes('data-task="true"') ? ' class="contains-task-list"' : '';
-    return `<${type}${startatt}${taskListClass}>\n${bodyStr}</${type}>\n`;
-  };
-
   marked.setOptions({
     gfm: true,
     breaks: true,
@@ -580,8 +562,32 @@
     const raw = stripFrontMatter(input.value);
     const html = marked.parse(raw);
     preview.innerHTML = DOMPurify.sanitize(html);
+    processTaskLists();
     updateToc();
     attachTaskCheckboxListeners();
+  }
+
+  // Enable task list checkboxes and add proper classes
+  function processTaskLists() {
+    // Find all list items with checkboxes (GFM task lists)
+    const taskListItems = preview.querySelectorAll('li > input[type="checkbox"]');
+
+    taskListItems.forEach((checkbox) => {
+      const li = checkbox.parentElement;
+
+      // Enable the checkbox (GFM renders them as disabled by default)
+      checkbox.removeAttribute('disabled');
+      checkbox.setAttribute('data-task', 'true');
+
+      // Add task-list-item class to the li
+      li.classList.add('task-list-item');
+
+      // Add contains-task-list class to the parent ul/ol
+      const list = li.parentElement;
+      if (list && (list.tagName === 'UL' || list.tagName === 'OL')) {
+        list.classList.add('contains-task-list');
+      }
+    });
   }
 
   // Handle checkbox clicks in task lists
