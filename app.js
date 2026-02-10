@@ -121,8 +121,10 @@
   renderer.list = function(body, ordered, start) {
     const type = ordered ? 'ol' : 'ul';
     const startatt = (ordered && start !== 1) ? (' start="' + start + '"') : '';
-    const taskListClass = body.includes('data-task="true"') ? ' class="contains-task-list"' : '';
-    return `<${type}${startatt}${taskListClass}>\n${body}</${type}>\n`;
+    // Convert body to string if it's an object/token
+    const bodyStr = typeof body === 'string' ? body : String(body);
+    const taskListClass = bodyStr.includes('data-task="true"') ? ' class="contains-task-list"' : '';
+    return `<${type}${startatt}${taskListClass}>\n${bodyStr}</${type}>\n`;
   };
 
   marked.setOptions({
