@@ -1201,10 +1201,16 @@ kbd {
 
 .auth-brand {
   display: flex;
+  flex-direction: column;
   align-items: center;
-  gap: 12px;
+  gap: 16px;
   margin-bottom: 32px;
   justify-content: center;
+}
+
+.auth-brand .brand-logo {
+  width: 150px;
+  height: 150px;
 }
 
 .auth-brand h1 {
