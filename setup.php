@@ -68,6 +68,24 @@ if ($result && $result->num_rows === 0) {
     echo '<p style="color:orange;">Migration: added <code>user_id</code> column to existing notes table.</p>';
 }
 
+// Create rate_limits table for IP-based rate limiting
+$sqlRateLimits = "CREATE TABLE IF NOT EXISTS rate_limits (
+    id INT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
+    ip_address VARCHAR(45) NOT NULL,
+    action VARCHAR(50) NOT NULL,
+    attempt_count INT UNSIGNED NOT NULL DEFAULT 1,
+    first_attempt DATETIME NOT NULL,
+    last_attempt DATETIME NOT NULL,
+    UNIQUE KEY idx_ip_action (ip_address, action),
+    INDEX idx_last_attempt (last_attempt)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci";
+
+if ($mysqli->query($sqlRateLimits)) {
+    echo '<p style="color:green;">Table <code>rate_limits</code> created successfully.</p>';
+} else {
+    echo '<p style="color:red;">Error creating rate_limits table: ' . htmlspecialchars($mysqli->error) . '</p>';
+}
+
 echo '<p><strong>Delete this file now!</strong> Then open <a href="index.html">your app</a>.</p>';
 
 $mysqli->close();
