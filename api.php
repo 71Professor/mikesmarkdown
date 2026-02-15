@@ -44,32 +44,88 @@ if ($_SERVER['REQUEST_METHOD'] === 'OPTIONS') {
     exit;
 }
 
-// ── Rate limiting (session-based, per IP) ─────────
+// ── Rate limiting (IP-based, database-backed) ─────────
 
-function checkRateLimit(string $action, int $maxAttempts = 5, int $windowSeconds = 300): void
+/**
+ * IP-based rate limiting using database storage
+ * This prevents bypass attempts via session/cookie manipulation
+ *
+ * @param mysqli $db Database connection
+ * @param string $action Action being rate-limited (e.g., 'login', 'register')
+ * @param int $maxAttempts Maximum allowed attempts within the time window
+ * @param int $windowSeconds Time window in seconds
+ * @throws void Terminates with 429 error if rate limit exceeded
+ */
+function checkRateLimit(mysqli $db, string $action, int $maxAttempts = 5, int $windowSeconds = 300): void
 {
     $ip = $_SERVER['REMOTE_ADDR'] ?? 'unknown';
-    $key = 'rate_limit_' . $action . '_' . md5($ip);
 
-    if (!isset($_SESSION[$key])) {
-        $_SESSION[$key] = ['count' => 0, 'first_attempt' => time()];
+    // Validate IP address to prevent injection
+    if ($ip === 'unknown' || !filter_var($ip, FILTER_VALIDATE_IP)) {
+        $ip = 'invalid';
     }
 
-    $data = &$_SESSION[$key];
+    $now = gmdate('Y-m-d H:i:s');
 
-    // Reset window if expired
-    if (time() - $data['first_attempt'] > $windowSeconds) {
-        $data['count'] = 0;
-        $data['first_attempt'] = time();
+    // Check for existing rate limit record
+    $stmt = $db->prepare("SELECT id, attempt_count, first_attempt, last_attempt FROM rate_limits WHERE ip_address = ? AND action = ?");
+    $stmt->bind_param('ss', $ip, $action);
+    $stmt->execute();
+    $result = $stmt->get_result();
+    $record = $result->fetch_assoc();
+    $stmt->close();
+
+    if ($record) {
+        $firstAttemptTime = strtotime($record['first_attempt']);
+        $currentTime = time();
+
+        // Check if the time window has expired
+        if ($currentTime - $firstAttemptTime > $windowSeconds) {
+            // Window expired, reset counter
+            $stmt = $db->prepare("UPDATE rate_limits SET attempt_count = 1, first_attempt = ?, last_attempt = ? WHERE id = ?");
+            $stmt->bind_param('ssi', $now, $now, $record['id']);
+            $stmt->execute();
+            $stmt->close();
+        } else {
+            // Within window, increment counter
+            $newCount = $record['attempt_count'] + 1;
+
+            // Check if limit exceeded
+            if ($newCount > $maxAttempts) {
+                $retryAfter = $firstAttemptTime + $windowSeconds - $currentTime;
+                header('Retry-After: ' . $retryAfter);
+                jsonError('Zu viele Versuche. Bitte warten Sie ' . ceil($retryAfter / 60) . ' Minuten.', 429);
+            }
+
+            // Update attempt count
+            $stmt = $db->prepare("UPDATE rate_limits SET attempt_count = ?, last_attempt = ? WHERE id = ?");
+            $stmt->bind_param('isi', $newCount, $now, $record['id']);
+            $stmt->execute();
+            $stmt->close();
+        }
+    } else {
+        // First attempt, create new record
+        $stmt = $db->prepare("INSERT INTO rate_limits (ip_address, action, attempt_count, first_attempt, last_attempt) VALUES (?, ?, 1, ?, ?)");
+        $stmt->bind_param('ssss', $ip, $action, $now, $now);
+        $stmt->execute();
+        $stmt->close();
+    }
+}
+
+/**
+ * Cleanup old rate limit entries (older than 1 day)
+ * Called periodically to prevent database bloat
+ *
+ * @param mysqli $db Database connection
+ */
+function cleanupRateLimits(mysqli $db): void
+{
+    // Only run cleanup 1% of the time to reduce overhead
+    if (rand(1, 100) > 1) {
+        return;
     }
 
-    $data['count']++;
-
-    if ($data['count'] > $maxAttempts) {
-        $retryAfter = $data['first_attempt'] + $windowSeconds - time();
-        header('Retry-After: ' . $retryAfter);
-        jsonError('Zu viele Versuche. Bitte warten Sie ' . ceil($retryAfter / 60) . ' Minuten.', 429);
-    }
+    $db->query("DELETE FROM rate_limits WHERE last_attempt < DATE_SUB(NOW(), INTERVAL 1 DAY)");
 }
 
 // ── Database connection ────────────────────────────
@@ -81,6 +137,9 @@ if ($db->connect_error) {
 }
 
 $db->set_charset(DB_CHARSET);
+
+// Periodic cleanup of old rate limit entries
+cleanupRateLimits($db);
 
 // ── Helper: get current user ID from session ──────
 
@@ -200,7 +259,7 @@ $db->close();
 
 function registerUser(mysqli $db, array $body): void
 {
-    checkRateLimit('register', 5, 600); // 5 attempts per 10 minutes
+    checkRateLimit($db, 'register', 5, 600); // 5 attempts per 10 minutes
 
     $username = trim($body['username'] ?? '');
     $email = trim($body['email'] ?? '');
@@ -262,7 +321,7 @@ function registerUser(mysqli $db, array $body): void
 
 function loginUser(mysqli $db, array $body): void
 {
-    checkRateLimit('login', 5, 300); // 5 attempts per 5 minutes
+    checkRateLimit($db, 'login', 5, 300); // 5 attempts per 5 minutes
 
     $email = trim($body['email'] ?? '');
     $password = $body['password'] ?? '';
