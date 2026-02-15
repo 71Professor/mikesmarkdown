@@ -28,7 +28,21 @@ if (!empty($_SERVER['HTTPS']) && $_SERVER['HTTPS'] !== 'off') {
     ini_set('session.cookie_secure', '1');
 }
 
+// Session timeout configuration
+$sessionTimeout = SESSION_TIMEOUT;
+ini_set('session.gc_maxlifetime', (string)$sessionTimeout);
+ini_set('session.cookie_lifetime', '0');  // Session cookie (browser close)
+ini_set('session.gc_probability', '1');
+ini_set('session.gc_divisor', '100');     // 1% cleanup probability
+
 session_start();
+
+// Check session activity for authenticated endpoints only
+// Skip for login/register to avoid interfering with authentication flow
+$action = $_GET['action'] ?? ($_POST['action'] ?? json_decode(file_get_contents('php://input'), true)['action'] ?? '');
+if (!in_array($action, ['login', 'register', 'session'], true)) {
+    checkSessionActivity();
+}
 
 // ── Security headers ──────────────────────────────
 
@@ -179,6 +193,43 @@ function requireAuth(): int
         jsonError('Nicht angemeldet', 401);
     }
     return $userId;
+}
+
+/**
+ * Check session activity and invalidate if timeout exceeded
+ * Tracks last activity timestamp to enforce inactivity timeout
+ *
+ * @return void Terminates with 401 if session expired
+ */
+function checkSessionActivity(): void
+{
+    $timeout = SESSION_TIMEOUT;
+
+    // Check if last activity timestamp exists
+    if (isset($_SESSION['last_activity'])) {
+        $inactive = time() - $_SESSION['last_activity'];
+
+        if ($inactive > $timeout) {
+            // Session expired due to inactivity
+            $logger = getLogger();
+            $logger->security('Session expired due to inactivity', [
+                'user_id' => $_SESSION['user_id'] ?? null,
+                'username' => $_SESSION['username'] ?? null,
+                'inactive_seconds' => $inactive,
+                'timeout_seconds' => $timeout,
+            ]);
+
+            // Clear session data
+            session_unset();
+            session_destroy();
+
+            // Return 401 to trigger frontend redirect
+            jsonError('Session abgelaufen wegen Inaktivität', 401);
+        }
+    }
+
+    // Update last activity timestamp
+    $_SESSION['last_activity'] = time();
 }
 
 /**
@@ -341,6 +392,7 @@ function registerUser(mysqli $db, array $body): void
     // Auto-login after registration
     $_SESSION['user_id'] = $userId;
     $_SESSION['username'] = $username;
+    $_SESSION['last_activity'] = time();  // Initialize activity tracking
 
     // Log successful registration for audit trail
     $logger = getLogger();
@@ -390,6 +442,7 @@ function loginUser(mysqli $db, array $body): void
 
     $_SESSION['user_id'] = (int) $user['id'];
     $_SESSION['username'] = $user['username'];
+    $_SESSION['last_activity'] = time();  // Initialize activity tracking
 
     // Log successful login for audit trail
     $logger = getLogger();
