@@ -28,3 +28,26 @@ Lade die folgenden Dateien in dein Zielverzeichnis (z. B. `htdocs/` oder ein Unt
    DB_USER=db12345
    DB_PASS=dein_passwort
    LOGGING_ENABLED=true
+
+
+### 3. Upload & Berechtigungen
+Verbinde dich per FTP/SFTP und lade alle Dateien hoch.
+
+Wichtig: Stelle sicher, dass versteckte Dateien wie .htaccess und .env mit übertragen wurden.
+
+Erstelle einen Ordner namens logs/ im Hauptverzeichnis und stelle sicher, dass der Webserver darin schreiben darf (Berechtigung 750 oder 755).
+
+### 4. Datenbank initialisieren
+Rufe https://deine-domain.de/setup.php im Browser auf.
+
+Bei Erfolg erscheint die Meldung: "Table notes created successfully".
+
+LÖSCHE die Datei setup.php sofort vom Server. Dies ist ein kritisches Sicherheitsrisiko, falls die Datei online bleibt.
+
+### 5. Sicherheits-Check
+Versuche, die Datei https://deine-domain.de/.env direkt im Browser aufzurufen. Du solltest einen 403 Forbidden Fehler erhalten. Die .htaccess sorgt dafür, dass sensible Daten geschützt bleiben.
+
+Laufender Betrieb & Wartung
+Logs: Überprüfe regelmäßig den Ordner /logs auf verdächtige Aktivitäten oder Fehlermeldungen.
+
+Updates: Bei Updates müssen lediglich index.html, styles.css, app.js und api.php überschrieben werden. Deine .env bleibt unverändert.
