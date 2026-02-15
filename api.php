@@ -98,6 +98,35 @@ function requireAuth(): int
     return $userId;
 }
 
+/**
+ * Validates password complexity requirements
+ * Returns null if valid, or an error message string if invalid
+ */
+function validatePasswordComplexity(string $password): ?string
+{
+    if (mb_strlen($password) < 8) {
+        return 'Passwort muss mindestens 8 Zeichen lang sein';
+    }
+
+    if (!preg_match('/[A-Z]/', $password)) {
+        return 'Passwort muss mindestens einen Großbuchstaben enthalten';
+    }
+
+    if (!preg_match('/[a-z]/', $password)) {
+        return 'Passwort muss mindestens einen Kleinbuchstaben enthalten';
+    }
+
+    if (!preg_match('/[0-9]/', $password)) {
+        return 'Passwort muss mindestens eine Ziffer enthalten';
+    }
+
+    if (!preg_match('/[^A-Za-z0-9]/', $password)) {
+        return 'Passwort muss mindestens ein Sonderzeichen enthalten';
+    }
+
+    return null;
+}
+
 // ── Routing ────────────────────────────────────────
 
 $method = $_SERVER['REQUEST_METHOD'];
@@ -189,8 +218,10 @@ function registerUser(mysqli $db, array $body): void
         jsonError('Ungültige E-Mail-Adresse', 400);
     }
 
-    if (mb_strlen($password) < 6) {
-        jsonError('Passwort muss mindestens 6 Zeichen lang sein', 400);
+    // Validate password complexity
+    $passwordError = validatePasswordComplexity($password);
+    if ($passwordError !== null) {
+        jsonError($passwordError, 400);
     }
 
     // Check if username or email already exists
