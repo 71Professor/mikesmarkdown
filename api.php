@@ -93,6 +93,15 @@ function checkRateLimit(mysqli $db, string $action, int $maxAttempts = 5, int $w
             // Check if limit exceeded
             if ($newCount > $maxAttempts) {
                 $retryAfter = $firstAttemptTime + $windowSeconds - $currentTime;
+                // Log rate limit violation
+                $logger = getLogger();
+                $logger->security('Rate limit exceeded', [
+                    'action' => $action,
+                    'ip' => $ip,
+                    'attempts' => $newCount,
+                    'max_attempts' => $maxAttempts,
+                    'retry_after' => $retryAfter,
+                ]);
                 header('Retry-After: ' . $retryAfter);
                 jsonError('Zu viele Versuche. Bitte warten Sie ' . ceil($retryAfter / 60) . ' Minuten.', 429);
             }
@@ -133,6 +142,15 @@ function cleanupRateLimits(mysqli $db): void
 $db = new mysqli(DB_HOST, DB_USER, DB_PASS, DB_NAME);
 
 if ($db->connect_error) {
+    // Log detailed error internally
+    $logger = getLogger();
+    $logger->critical('Database connection failed', [
+        'error' => $db->connect_error,
+        'errno' => $db->connect_errno,
+        'host' => DB_HOST,
+        'database' => DB_NAME,
+    ]);
+    // Return generic error to user
     jsonError('Database connection failed', 500);
 }
 
@@ -140,6 +158,12 @@ $db->set_charset(DB_CHARSET);
 
 // Periodic cleanup of old rate limit entries
 cleanupRateLimits($db);
+
+// Periodic cleanup of old log files (1% chance per request)
+if (rand(1, 100) === 1) {
+    $logger = getLogger();
+    $logger->cleanupOldLogs(LOG_RETENTION_DAYS);
+}
 
 // ── Helper: get current user ID from session ──────
 
@@ -301,6 +325,12 @@ function registerUser(mysqli $db, array $body): void
     $stmt->bind_param('sss', $username, $email, $passwordHash);
 
     if (!$stmt->execute()) {
+        // Log detailed error internally
+        $logger = getLogger();
+        $logger->databaseError('user registration', $db, [
+            'username' => $username,
+            'email' => $email,
+        ]);
         $stmt->close();
         jsonError('Registrierung fehlgeschlagen', 500);
     }
@@ -311,6 +341,14 @@ function registerUser(mysqli $db, array $body): void
     // Auto-login after registration
     $_SESSION['user_id'] = $userId;
     $_SESSION['username'] = $username;
+
+    // Log successful registration for audit trail
+    $logger = getLogger();
+    $logger->security('New user registered', [
+        'user_id' => $userId,
+        'username' => $username,
+        'email' => $email,
+    ]);
 
     jsonSuccess([
         'id' => $userId,
@@ -338,6 +376,12 @@ function loginUser(mysqli $db, array $body): void
     $stmt->close();
 
     if (!$user || !password_verify($password, $user['password_hash'])) {
+        // Log failed login attempt
+        $logger = getLogger();
+        $logger->security('Failed login attempt', [
+            'email' => $email,
+            'reason' => !$user ? 'user_not_found' : 'invalid_password',
+        ]);
         jsonError('Ungültige Anmeldedaten', 401);
     }
 
@@ -346,6 +390,14 @@ function loginUser(mysqli $db, array $body): void
 
     $_SESSION['user_id'] = (int) $user['id'];
     $_SESSION['username'] = $user['username'];
+
+    // Log successful login for audit trail
+    $logger = getLogger();
+    $logger->security('Successful login', [
+        'user_id' => (int) $user['id'],
+        'username' => $user['username'],
+        'email' => $email,
+    ]);
 
     jsonSuccess([
         'id' => (int) $user['id'],
@@ -480,6 +532,12 @@ function createNote(mysqli $db, int $userId, array $body): void
     $stmt->bind_param('sississ', $id, $userId, $title, $content, $pinned, $now, $now);
 
     if (!$stmt->execute()) {
+        // Log detailed error internally
+        $logger = getLogger();
+        $logger->databaseError('note creation', $db, [
+            'user_id' => $userId,
+            'note_id' => $id,
+        ]);
         $stmt->close();
         jsonError('Failed to create note', 500);
     }
@@ -524,6 +582,12 @@ function updateNote(mysqli $db, int $userId, array $body): void
     }
 
     if (!$stmt->execute()) {
+        // Log detailed error internally
+        $logger = getLogger();
+        $logger->databaseError('note update', $db, [
+            'user_id' => $userId,
+            'note_id' => $id,
+        ]);
         $stmt->close();
         jsonError('Failed to update note', 500);
     }
