@@ -30,5 +30,8 @@ define('LOGGING_ENABLED', $_ENV['LOGGING_ENABLED'] ?? true);
 define('LOG_DIR', $_ENV['LOG_DIR'] ?? __DIR__ . '/logs');
 define('LOG_RETENTION_DAYS', $_ENV['LOG_RETENTION_DAYS'] ?? 30);
 
+// Session timeout configuration (in seconds)
+define('SESSION_TIMEOUT', (int)($_ENV['SESSION_TIMEOUT'] ?? 1800)); // 30 min default
+
 // Include logger
 require_once __DIR__ . '/logger.php';
