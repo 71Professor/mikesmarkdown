@@ -1,2 +1,6 @@
 # Environment file with database credentials
 .env
+
+# Log files
+logs/
+*.log

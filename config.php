@@ -24,3 +24,11 @@ define('DB_NAME', $_ENV['DB_NAME'] ?? '');
 define('DB_USER', $_ENV['DB_USER'] ?? '');
 define('DB_PASS', $_ENV['DB_PASS'] ?? '');
 define('DB_CHARSET', 'utf8mb4');
+
+// Logging configuration
+define('LOGGING_ENABLED', $_ENV['LOGGING_ENABLED'] ?? true);
+define('LOG_DIR', $_ENV['LOG_DIR'] ?? __DIR__ . '/logs');
+define('LOG_RETENTION_DAYS', $_ENV['LOG_RETENTION_DAYS'] ?? 30);
+
+// Include logger
+require_once __DIR__ . '/logger.php';
