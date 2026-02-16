@@ -293,19 +293,9 @@
     try {
       const data = await apiPost("requestPasswordReset", { email });
       forgotPasswordForm.reset();
-      showAuthSuccess(forgotSuccess, data.message || "Reset-Link wurde erstellt");
-
-      // Show token in development (will be removed in production)
-      if (data.token) {
-        showAuthSuccess(forgotSuccess,
-          `${data.message || "Reset-Link wurde erstellt"}\n\nDevelopment Token: ${data.token}\n\nKlicke hier um das Passwort zurückzusetzen`
-        );
-        // Auto-fill token in reset form for convenience in dev
-        setTimeout(() => {
-          $("#reset-token").value = data.token;
-          showResetPasswordForm();
-        }, 3000);
-      }
+      showAuthSuccess(forgotSuccess,
+        data.message || "Ein Reset-Link wurde an Ihre E-Mail-Adresse gesendet. Bitte überprüfen Sie Ihr Postfach (auch Spam-Ordner)."
+      );
     } catch (err) {
       showAuthError(forgotError, err.message);
     }

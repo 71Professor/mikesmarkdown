@@ -4,3 +4,7 @@
 # Log files
 logs/
 *.log
+
+# Composer dependencies
+vendor/
+composer.lock

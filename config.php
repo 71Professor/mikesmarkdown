@@ -205,5 +205,18 @@ define('LOG_RETENTION_DAYS', $_ENV['LOG_RETENTION_DAYS'] ?? 30);
 // Session timeout configuration (in seconds)
 define('SESSION_TIMEOUT', (int)($_ENV['SESSION_TIMEOUT'] ?? 1800)); // 30 min default
 
+// SMTP configuration for password reset emails
+define('SMTP_HOST', $_ENV['SMTP_HOST'] ?? '');
+define('SMTP_PORT', (int)($_ENV['SMTP_PORT'] ?? 587));
+define('SMTP_SECURE', $_ENV['SMTP_SECURE'] ?? 'tls');
+define('SMTP_USER', $_ENV['SMTP_USER'] ?? '');
+define('SMTP_PASS', $_ENV['SMTP_PASS'] ?? '');
+define('SMTP_FROM_EMAIL', $_ENV['SMTP_FROM_EMAIL'] ?? 'noreply@example.com');
+define('SMTP_FROM_NAME', $_ENV['SMTP_FROM_NAME'] ?? 'MikesMarkdown');
+define('APP_URL', $_ENV['APP_URL'] ?? 'http://localhost');
+
 // Include logger
 require_once __DIR__ . '/logger.php';
+
+// Include mailer functions
+require_once __DIR__ . '/mailer.php';

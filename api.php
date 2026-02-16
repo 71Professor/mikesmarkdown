@@ -579,12 +579,21 @@ function requestPasswordReset(mysqli $db, array $body): void
         'token_expires' => $expires,
     ]);
 
-    // In production, you would send an email here
-    // For now, return the token in the response (development only!)
+    // Send password reset email
+    $emailSent = sendPasswordResetEmail($email, $token);
+
+    if (!$emailSent) {
+        $logger->error('Failed to send password reset email', [
+            'user_id' => $userId,
+            'email' => $email,
+        ]);
+        // Don't reveal email sending failure to prevent information disclosure
+        // Return success anyway to prevent email enumeration
+    }
+
+    // Always return success message (prevents email enumeration)
     jsonSuccess([
-        'message' => 'Reset-Link wurde erstellt',
-        'token' => $token,  // REMOVE THIS IN PRODUCTION! Send via email instead
-        'expires' => $expires,
+        'message' => 'Falls die E-Mail-Adresse existiert, wurde ein Reset-Link gesendet',
     ]);
 }
 
