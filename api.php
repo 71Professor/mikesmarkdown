@@ -581,17 +581,12 @@ function requestPasswordReset(mysqli $db, array $body): void
 
     // Send password reset email with error handling
     try {
-        $emailSent = sendPasswordResetEmail($email, $token);
+        sendPasswordResetEmail($email, $token);
 
-        if (!$emailSent) {
-            $logger->error('Failed to send password reset email', [
-                'user_id' => $userId,
-                'email' => $email,
-            ]);
-            // TEMPORARY DEBUG: Show error in development
-            // TODO: Remove this in production! Just return success to prevent email enumeration
-            jsonError('E-Mail konnte nicht gesendet werden. Bitte prüfen Sie die SMTP-Konfiguration in der .env Datei.', 500);
-        }
+        $logger->info('Password reset email sent successfully', [
+            'user_id' => $userId,
+            'email' => $email,
+        ]);
     } catch (Exception $e) {
         $logger->error('Exception while sending password reset email', [
             'user_id' => $userId,
@@ -599,9 +594,9 @@ function requestPasswordReset(mysqli $db, array $body): void
             'exception' => $e->getMessage(),
             'trace' => $e->getTraceAsString(),
         ]);
-        // TEMPORARY DEBUG: Show actual error
-        // TODO: Remove this in production!
-        jsonError('E-Mail-Fehler: ' . $e->getMessage(), 500);
+        // Show detailed error during development to help with troubleshooting
+        // In production, you may want to return a generic success message to prevent email enumeration
+        jsonError($e->getMessage(), 500);
     }
 
     // Always return success message (prevents email enumeration)
