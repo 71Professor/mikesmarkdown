@@ -13,10 +13,22 @@ use PHPMailer\PHPMailer\Exception;
  *
  * @param string $email Empfänger E-Mail-Adresse
  * @param string $token Reset-Token
- * @return bool Erfolg der E-Mail-Versendung
+ * @return void
+ * @throws Exception Wenn E-Mail nicht gesendet werden konnte
  */
-function sendPasswordResetEmail(string $email, string $token): bool
+function sendPasswordResetEmail(string $email, string $token): void
 {
+    // Validate SMTP configuration before attempting to send
+    if (empty(SMTP_HOST) || empty(SMTP_USER) || empty(SMTP_PASS)) {
+        $logger = getLogger();
+        $logger->error('SMTP configuration incomplete', [
+            'smtp_host_set' => !empty(SMTP_HOST),
+            'smtp_user_set' => !empty(SMTP_USER),
+            'smtp_pass_set' => !empty(SMTP_PASS),
+        ]);
+        throw new Exception('SMTP-Konfiguration ist unvollständig. Bitte prüfen Sie die Einstellungen in der .env Datei.');
+    }
+
     require_once __DIR__ . '/vendor/autoload.php';
 
     $mail = new PHPMailer(true);
@@ -31,6 +43,14 @@ function sendPasswordResetEmail(string $email, string $token): bool
         $mail->SMTPSecure = SMTP_SECURE; // 'tls' oder 'ssl'
         $mail->Port = SMTP_PORT;
         $mail->CharSet = 'UTF-8';
+
+        // Enable detailed debug output for troubleshooting
+        // 0 = off, 1 = client messages, 2 = client and server messages
+        $mail->SMTPDebug = 0; // Set to 2 for debugging
+        $mail->Debugoutput = function($str, $level) {
+            $logger = getLogger();
+            $logger->debug('SMTP Debug', ['message' => $str, 'level' => $level]);
+        };
 
         // Absender
         $mail->setFrom(SMTP_FROM_EMAIL, SMTP_FROM_NAME);
@@ -121,22 +141,27 @@ function sendPasswordResetEmail(string $email, string $token): bool
 
         // Log erfolgreichen Versand
         $logger = getLogger();
-        $logger->info('Password reset email sent', [
+        $logger->info('Password reset email sent successfully', [
             'email' => $email,
             'smtp_host' => SMTP_HOST,
+            'smtp_port' => SMTP_PORT,
         ]);
 
-        return true;
-
     } catch (Exception $e) {
-        // Log Fehler
+        // Log Fehler mit detaillierten Informationen
         $logger = getLogger();
         $logger->error('Failed to send password reset email', [
             'email' => $email,
             'error' => $mail->ErrorInfo,
             'exception' => $e->getMessage(),
+            'smtp_host' => SMTP_HOST,
+            'smtp_port' => SMTP_PORT,
+            'smtp_secure' => SMTP_SECURE,
+            'smtp_user' => SMTP_USER,
+            'from_email' => SMTP_FROM_EMAIL,
         ]);
 
-        return false;
+        // Re-throw exception so it can be caught and displayed to user
+        throw new Exception('E-Mail-Versand fehlgeschlagen: ' . $e->getMessage());
     }
 }
