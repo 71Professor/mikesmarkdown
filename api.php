@@ -7,6 +7,9 @@
  *   POST { action: "login", email, password }
  *   POST { action: "logout" }
  *   GET  ?action=session                → current user info
+ *   POST { action: "requestPasswordReset", email } → request password reset
+ *   POST { action: "resetPassword", token, newPassword } → reset password with token
+ *   POST { action: "changePassword", currentPassword, newPassword } → change password (requires auth)
  *
  * Note Endpoints (require authentication):
  *   GET  ?action=list              → all notes for current user
@@ -301,6 +304,18 @@ if ($method === 'GET') {
         case 'logout':
             logoutUser();
             break;
+        case 'requestPasswordReset':
+            requestPasswordReset($db, $body);
+            break;
+        case 'resetPassword':
+            resetPassword($db, $body);
+            break;
+
+        // Auth actions (auth required)
+        case 'changePassword':
+            $userId = requireAuth();
+            changePassword($db, $userId, $body);
+            break;
 
         // Note actions (auth required)
         case 'create':
@@ -493,6 +508,225 @@ function getSession(): void
         'id' => $userId,
         'username' => $_SESSION['username'] ?? '',
     ]);
+}
+
+function requestPasswordReset(mysqli $db, array $body): void
+{
+    checkRateLimit($db, 'password_reset', 3, 600); // 3 attempts per 10 minutes
+
+    $email = trim($body['email'] ?? '');
+
+    if ($email === '') {
+        jsonError('E-Mail ist erforderlich', 400);
+    }
+
+    if (!filter_var($email, FILTER_VALIDATE_EMAIL)) {
+        jsonError('Ungültige E-Mail-Adresse', 400);
+    }
+
+    // Check if user exists
+    $stmt = $db->prepare("SELECT id FROM users WHERE email = ?");
+    $stmt->bind_param('s', $email);
+    $stmt->execute();
+    $result = $stmt->get_result();
+    $user = $result->fetch_assoc();
+    $stmt->close();
+
+    // Always return success even if user doesn't exist (security best practice)
+    // This prevents email enumeration attacks
+    if (!$user) {
+        $logger = getLogger();
+        $logger->security('Password reset requested for non-existent email', [
+            'email' => $email,
+        ]);
+        jsonSuccess(['message' => 'Falls die E-Mail-Adresse existiert, wurde ein Reset-Link gesendet']);
+        return;
+    }
+
+    $userId = (int) $user['id'];
+
+    // Generate secure random token
+    $token = bin2hex(random_bytes(32)); // 64 character hex string
+    $now = gmdate('Y-m-d H:i:s');
+    $expires = gmdate('Y-m-d H:i:s', time() + 3600); // 1 hour expiry
+
+    // Delete any existing tokens for this user
+    $stmt = $db->prepare("DELETE FROM password_reset_tokens WHERE user_id = ?");
+    $stmt->bind_param('i', $userId);
+    $stmt->execute();
+    $stmt->close();
+
+    // Insert new token
+    $stmt = $db->prepare("INSERT INTO password_reset_tokens (user_id, token, created, expires) VALUES (?, ?, ?, ?)");
+    $stmt->bind_param('isss', $userId, $token, $now, $expires);
+
+    if (!$stmt->execute()) {
+        $logger = getLogger();
+        $logger->databaseError('password reset token creation', $db, [
+            'user_id' => $userId,
+            'email' => $email,
+        ]);
+        $stmt->close();
+        jsonError('Fehler beim Erstellen des Reset-Tokens', 500);
+    }
+    $stmt->close();
+
+    // Log password reset request
+    $logger = getLogger();
+    $logger->security('Password reset requested', [
+        'user_id' => $userId,
+        'email' => $email,
+        'token_expires' => $expires,
+    ]);
+
+    // In production, you would send an email here
+    // For now, return the token in the response (development only!)
+    jsonSuccess([
+        'message' => 'Reset-Link wurde erstellt',
+        'token' => $token,  // REMOVE THIS IN PRODUCTION! Send via email instead
+        'expires' => $expires,
+    ]);
+}
+
+function resetPassword(mysqli $db, array $body): void
+{
+    checkRateLimit($db, 'password_reset_verify', 5, 300); // 5 attempts per 5 minutes
+
+    $token = trim($body['token'] ?? '');
+    $newPassword = $body['newPassword'] ?? '';
+
+    if ($token === '' || $newPassword === '') {
+        jsonError('Token und neues Passwort sind erforderlich', 400);
+    }
+
+    // Validate password complexity
+    $passwordError = validatePasswordComplexity($newPassword);
+    if ($passwordError !== null) {
+        jsonError($passwordError, 400);
+    }
+
+    // Find valid, unused token
+    $now = gmdate('Y-m-d H:i:s');
+    $stmt = $db->prepare(
+        "SELECT id, user_id FROM password_reset_tokens
+         WHERE token = ? AND expires > ? AND used = 0"
+    );
+    $stmt->bind_param('ss', $token, $now);
+    $stmt->execute();
+    $result = $stmt->get_result();
+    $tokenRecord = $result->fetch_assoc();
+    $stmt->close();
+
+    if (!$tokenRecord) {
+        $logger = getLogger();
+        $logger->security('Invalid or expired password reset token used', [
+            'token_prefix' => substr($token, 0, 8) . '...',
+        ]);
+        jsonError('Ungültiger oder abgelaufener Reset-Link', 400);
+    }
+
+    $userId = (int) $tokenRecord['user_id'];
+    $tokenId = (int) $tokenRecord['id'];
+
+    // Hash new password
+    $passwordHash = password_hash($newPassword, PASSWORD_DEFAULT);
+
+    // Update user password
+    $stmt = $db->prepare("UPDATE users SET password_hash = ? WHERE id = ?");
+    $stmt->bind_param('si', $passwordHash, $userId);
+
+    if (!$stmt->execute()) {
+        $logger = getLogger();
+        $logger->databaseError('password reset', $db, [
+            'user_id' => $userId,
+        ]);
+        $stmt->close();
+        jsonError('Fehler beim Zurücksetzen des Passworts', 500);
+    }
+    $stmt->close();
+
+    // Mark token as used
+    $stmt = $db->prepare("UPDATE password_reset_tokens SET used = 1 WHERE id = ?");
+    $stmt->bind_param('i', $tokenId);
+    $stmt->execute();
+    $stmt->close();
+
+    // Log successful password reset
+    $logger = getLogger();
+    $logger->security('Password successfully reset', [
+        'user_id' => $userId,
+    ]);
+
+    jsonSuccess(['message' => 'Passwort erfolgreich zurückgesetzt']);
+}
+
+function changePassword(mysqli $db, int $userId, array $body): void
+{
+    checkRateLimit($db, 'password_change', 5, 300); // 5 attempts per 5 minutes
+
+    $currentPassword = $body['currentPassword'] ?? '';
+    $newPassword = $body['newPassword'] ?? '';
+
+    if ($currentPassword === '' || $newPassword === '') {
+        jsonError('Aktuelles und neues Passwort sind erforderlich', 400);
+    }
+
+    // Validate new password complexity
+    $passwordError = validatePasswordComplexity($newPassword);
+    if ($passwordError !== null) {
+        jsonError($passwordError, 400);
+    }
+
+    // Get current password hash
+    $stmt = $db->prepare("SELECT password_hash FROM users WHERE id = ?");
+    $stmt->bind_param('i', $userId);
+    $stmt->execute();
+    $result = $stmt->get_result();
+    $user = $result->fetch_assoc();
+    $stmt->close();
+
+    if (!$user) {
+        jsonError('Benutzer nicht gefunden', 404);
+    }
+
+    // Verify current password
+    if (!password_verify($currentPassword, $user['password_hash'])) {
+        $logger = getLogger();
+        $logger->security('Failed password change attempt - incorrect current password', [
+            'user_id' => $userId,
+        ]);
+        jsonError('Aktuelles Passwort ist falsch', 401);
+    }
+
+    // Check if new password is same as current
+    if ($currentPassword === $newPassword) {
+        jsonError('Neues Passwort muss sich vom aktuellen unterscheiden', 400);
+    }
+
+    // Hash new password
+    $passwordHash = password_hash($newPassword, PASSWORD_DEFAULT);
+
+    // Update password
+    $stmt = $db->prepare("UPDATE users SET password_hash = ? WHERE id = ?");
+    $stmt->bind_param('si', $passwordHash, $userId);
+
+    if (!$stmt->execute()) {
+        $logger = getLogger();
+        $logger->databaseError('password change', $db, [
+            'user_id' => $userId,
+        ]);
+        $stmt->close();
+        jsonError('Fehler beim Ändern des Passworts', 500);
+    }
+    $stmt->close();
+
+    // Log successful password change
+    $logger = getLogger();
+    $logger->security('Password successfully changed', [
+        'user_id' => $userId,
+    ]);
+
+    jsonSuccess(['message' => 'Passwort erfolgreich geändert']);
 }
 
 // ══════════════════════════════════════════════════
