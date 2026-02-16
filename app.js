@@ -15,12 +15,29 @@
   const mainApp = $("#main-app");
   const loginForm = $("#login-form");
   const registerForm = $("#register-form");
+  const forgotPasswordForm = $("#forgot-password-form");
+  const resetPasswordForm = $("#reset-password-form");
   const loginError = $("#login-error");
   const registerError = $("#register-error");
+  const forgotError = $("#forgot-error");
+  const forgotSuccess = $("#forgot-success");
+  const resetError = $("#reset-error");
+  const resetSuccess = $("#reset-success");
   const showRegisterBtn = $("#show-register");
   const showLoginBtn = $("#show-login");
+  const showForgotPasswordBtn = $("#show-forgot-password");
+  const backToLoginBtn = $("#back-to-login");
+  const backToLoginBtn2 = $("#back-to-login-2");
   const userGreeting = $("#user-greeting");
   const btnLogout = $("#btn-logout");
+  const btnSettings = $("#btn-settings");
+
+  // Password change modal refs
+  const changePasswordModal = $("#change-password-modal");
+  const changePasswordForm = $("#change-password-form");
+  const changePasswordError = $("#change-password-error");
+  const changePasswordSuccess = $("#change-password-success");
+  const changePasswordCancelBtn = $("#change-password-cancel");
 
   // App refs
   const app = mainApp;
@@ -184,6 +201,16 @@
     el.style.display = "none";
   }
 
+  function showAuthSuccess(el, message) {
+    el.textContent = message;
+    el.style.display = "";
+  }
+
+  function hideAuthSuccess(el) {
+    el.textContent = "";
+    el.style.display = "none";
+  }
+
   async function checkSession() {
     try {
       const data = await apiGet("session");
@@ -254,6 +281,137 @@
     currentUser = null;
     currentDocId = null;
     showAuth();
+  }
+
+  async function handleForgotPassword(e) {
+    e.preventDefault();
+    hideAuthError(forgotError);
+    hideAuthSuccess(forgotSuccess);
+
+    const email = $("#forgot-email").value.trim();
+
+    try {
+      const data = await apiPost("requestPasswordReset", { email });
+      forgotPasswordForm.reset();
+      showAuthSuccess(forgotSuccess, data.message || "Reset-Link wurde erstellt");
+
+      // Show token in development (will be removed in production)
+      if (data.token) {
+        showAuthSuccess(forgotSuccess,
+          `${data.message || "Reset-Link wurde erstellt"}\n\nDevelopment Token: ${data.token}\n\nKlicke hier um das Passwort zurückzusetzen`
+        );
+        // Auto-fill token in reset form for convenience in dev
+        setTimeout(() => {
+          $("#reset-token").value = data.token;
+          showResetPasswordForm();
+        }, 3000);
+      }
+    } catch (err) {
+      showAuthError(forgotError, err.message);
+    }
+  }
+
+  async function handleResetPassword(e) {
+    e.preventDefault();
+    hideAuthError(resetError);
+    hideAuthSuccess(resetSuccess);
+
+    const token = $("#reset-token").value.trim();
+    const newPassword = $("#reset-new-password").value;
+    const confirmPassword = $("#reset-confirm-password").value;
+
+    if (newPassword !== confirmPassword) {
+      showAuthError(resetError, "Passwörter stimmen nicht überein");
+      return;
+    }
+
+    try {
+      const data = await apiPost("resetPassword", { token, newPassword });
+      resetPasswordForm.reset();
+      showAuthSuccess(resetSuccess, data.message || "Passwort erfolgreich zurückgesetzt");
+
+      // Redirect to login after 2 seconds
+      setTimeout(() => {
+        showLoginForm();
+      }, 2000);
+    } catch (err) {
+      showAuthError(resetError, err.message);
+    }
+  }
+
+  async function handleChangePassword(e) {
+    e.preventDefault();
+    hideAuthError(changePasswordError);
+    hideAuthSuccess(changePasswordSuccess);
+
+    const currentPassword = $("#current-password").value;
+    const newPassword = $("#new-password").value;
+    const confirmPassword = $("#confirm-password").value;
+
+    if (newPassword !== confirmPassword) {
+      showAuthError(changePasswordError, "Passwörter stimmen nicht überein");
+      return;
+    }
+
+    try {
+      const data = await apiPost("changePassword", { currentPassword, newPassword });
+      changePasswordForm.reset();
+      showAuthSuccess(changePasswordSuccess, data.message || "Passwort erfolgreich geändert");
+
+      // Close modal after 2 seconds
+      setTimeout(() => {
+        changePasswordModal.style.display = "none";
+      }, 2000);
+    } catch (err) {
+      showAuthError(changePasswordError, err.message);
+    }
+  }
+
+  function showLoginForm() {
+    loginForm.style.display = "";
+    registerForm.style.display = "none";
+    forgotPasswordForm.style.display = "none";
+    resetPasswordForm.style.display = "none";
+    hideAuthError(loginError);
+    hideAuthError(registerError);
+    hideAuthError(forgotError);
+    hideAuthSuccess(forgotSuccess);
+    hideAuthError(resetError);
+    hideAuthSuccess(resetSuccess);
+  }
+
+  function showRegisterForm() {
+    loginForm.style.display = "none";
+    registerForm.style.display = "";
+    forgotPasswordForm.style.display = "none";
+    resetPasswordForm.style.display = "none";
+    hideAuthError(loginError);
+    hideAuthError(registerError);
+  }
+
+  function showForgotPasswordForm() {
+    loginForm.style.display = "none";
+    registerForm.style.display = "none";
+    forgotPasswordForm.style.display = "";
+    resetPasswordForm.style.display = "none";
+    hideAuthError(forgotError);
+    hideAuthSuccess(forgotSuccess);
+  }
+
+  function showResetPasswordForm() {
+    loginForm.style.display = "none";
+    registerForm.style.display = "none";
+    forgotPasswordForm.style.display = "none";
+    resetPasswordForm.style.display = "";
+    hideAuthError(resetError);
+    hideAuthSuccess(resetSuccess);
+  }
+
+  function showChangePasswordModal() {
+    changePasswordModal.style.display = "";
+    changePasswordForm.reset();
+    hideAuthError(changePasswordError);
+    hideAuthSuccess(changePasswordSuccess);
   }
 
   // ══════════════════════════════════════════════════
@@ -1052,20 +1210,39 @@ ${sanitized}
   function bindAuthEvents() {
     loginForm.addEventListener("submit", handleLogin);
     registerForm.addEventListener("submit", handleRegister);
+    forgotPasswordForm.addEventListener("submit", handleForgotPassword);
+    resetPasswordForm.addEventListener("submit", handleResetPassword);
+    changePasswordForm.addEventListener("submit", handleChangePassword);
 
-    showRegisterBtn.addEventListener("click", () => {
-      loginForm.style.display = "none";
-      registerForm.style.display = "";
-      hideAuthError(loginError);
-    });
-
-    showLoginBtn.addEventListener("click", () => {
-      registerForm.style.display = "none";
-      loginForm.style.display = "";
-      hideAuthError(registerError);
-    });
+    showRegisterBtn.addEventListener("click", showRegisterForm);
+    showLoginBtn.addEventListener("click", showLoginForm);
+    showForgotPasswordBtn.addEventListener("click", showForgotPasswordForm);
+    backToLoginBtn.addEventListener("click", showLoginForm);
+    backToLoginBtn2.addEventListener("click", showLoginForm);
 
     btnLogout.addEventListener("click", handleLogout);
+    btnSettings.addEventListener("click", showChangePasswordModal);
+
+    changePasswordCancelBtn.addEventListener("click", () => {
+      changePasswordModal.style.display = "none";
+    });
+
+    // Close modal when clicking outside
+    changePasswordModal.addEventListener("click", (e) => {
+      if (e.target === changePasswordModal) {
+        changePasswordModal.style.display = "none";
+      }
+    });
+
+    // Check for reset token in URL (for email links in production)
+    const urlParams = new URLSearchParams(window.location.search);
+    const resetToken = urlParams.get("reset_token");
+    if (resetToken) {
+      $("#reset-token").value = resetToken;
+      showResetPasswordForm();
+      // Clean URL
+      window.history.replaceState({}, document.title, window.location.pathname);
+    }
   }
 
   let appEventsbound = false;
