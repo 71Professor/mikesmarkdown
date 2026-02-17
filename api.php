@@ -723,6 +723,14 @@ function resetPassword(mysqli $db, array $body): void
 
 function verifyEmail(mysqli $db, array $body): void
 {
+    // DEBUG: Log function entry
+    $logger = getLogger();
+    $logger->info('verifyEmail() called', [
+        'token_provided' => !empty($body['token'] ?? ''),
+        'session_before' => $_SESSION,
+        'session_id_before' => session_id(),
+    ]);
+
     checkRateLimit($db, 'email_verification', 10, 600); // 10 attempts per 10 minutes
 
     $token = trim($body['token'] ?? '');
@@ -798,11 +806,13 @@ function verifyEmail(mysqli $db, array $body): void
     $_SESSION['username'] = $user['username'];
     $_SESSION['last_activity'] = time();
 
-    // Log successful verification
+    // Log successful verification WITH session details
     $logger = getLogger();
-    $logger->security('Email verified successfully', [
+    $logger->security('Email verified successfully - AUTO LOGIN', [
         'user_id' => $userId,
         'email' => $user['email'],
+        'session_id' => session_id(),
+        'session_data' => $_SESSION,
     ]);
 
     jsonSuccess([
