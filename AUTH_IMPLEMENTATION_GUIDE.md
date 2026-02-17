@@ -28,6 +28,7 @@ Dieser Leitfaden beschreibt die **komplette Implementierung** eines professionel
 ### Funktionsumfang
 
 ✅ **Selbstregistrierung** mit Passwort-Hashing
+✅ **E-Mail-Verifizierung** mit Token-basiertem Link
 ✅ **Login/Logout** mit Session-Management
 ✅ **"Passwort vergessen"** mit E-Mail-Token
 ✅ **"Passwort zurücksetzen"** per E-Mail-Link
@@ -1276,4 +1277,682 @@ Das System ist **OWASP-konform**, **DSGVO-ready** (mit Logging-Consent) und **pr
 
 **Lizenz:** MIT
 **Support:** Öffnen Sie ein GitHub Issue bei Problemen
-**Version:** 1.0 (2026-02-16)
+**Version:** 1.1 (2026-02-17)
+
+---
+
+## 📧 Implementierungsbericht: E-Mail-Verifizierung (2026-02-17)
+
+### Übersicht
+
+Am 17. Februar 2026 wurde die **E-Mail-Verifizierung** zum Registrierungsprozess hinzugefügt. Nach mehreren Iterationen und Debugging-Sessions wurde ein **vereinfachter, robuster Ansatz** gewählt.
+
+### Finaler Implementierungsansatz
+
+**Flow:**
+1. User registriert sich → E-Mail mit Verifizierungslink wird gesendet
+2. User klickt auf Link → E-Mail wird als verifiziert markiert
+3. Erfolgsmeldung: *"Danke. Ihre E-Mail ist bestätigt. Loggen Sie sich jetzt auf der Login-Seite ein"*
+4. User loggt sich **manuell** ein (kein automatischer Login)
+5. Login ist nur für verifizierte User möglich
+
+**Wichtig:** Ursprünglich wurde ein Auto-Login nach Verifizierung implementiert, aber aufgrund von Race Conditions und Session-Cookie-Problemen wurde dieser Ansatz verworfen. Der finale Ansatz ohne Auto-Login ist **einfacher, robuster und sicherer**.
+
+---
+
+### Datenbank-Schema-Änderungen
+
+**1. `users`-Tabelle erweitert:**
+
+```sql
+ALTER TABLE users
+ADD COLUMN is_email_verified TINYINT(1) NOT NULL DEFAULT 0 AFTER password_hash,
+ADD COLUMN email_verified_at DATETIME NULL AFTER is_email_verified,
+ADD INDEX idx_email_verified (is_email_verified);
+```
+
+**2. Neue Tabelle `email_verification_tokens`:**
+
+```sql
+CREATE TABLE IF NOT EXISTS email_verification_tokens (
+    id INT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
+    user_id INT UNSIGNED NOT NULL,
+    token VARCHAR(64) NOT NULL UNIQUE,
+    created DATETIME NOT NULL,
+    expires DATETIME NOT NULL,
+    used TINYINT(1) NOT NULL DEFAULT 0,
+    INDEX idx_token (token),
+    INDEX idx_expires (expires),
+    INDEX idx_user_id (user_id),
+    FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+```
+
+**3. Bestehende User migriert:**
+
+```sql
+-- Alle existierenden User automatisch als verifiziert markieren
+UPDATE users SET is_email_verified = 1 WHERE id > 0;
+```
+
+**Wichtig:** Das Schema wurde in `setup_pw.php` integriert und automatisiert.
+
+---
+
+### Backend-Implementierung (`api.php`)
+
+#### Neue Endpoints
+
+**1. `verifyEmail` - E-Mail-Verifizierung**
+
+```php
+POST /api.php { action: "verifyEmail", token }
+
+Ablauf:
+- Token validieren (existiert, nicht abgelaufen, nicht verwendet)
+- User als verifiziert markieren (is_email_verified = 1)
+- Token als verwendet markieren (used = 1)
+- Rate-Limiting: 10 Versuche pro 10 Minuten
+
+Response:
+- Success: { success: true, data: { message: "Danke. Ihre E-Mail ist bestätigt..." } }
+- Error: { success: false, error: "Ungültiger oder abgelaufener Token" }
+
+WICHTIG: Kein Auto-Login! Nur Bestätigung zurückgeben.
+```
+
+**Edge Case - Bereits verifizierte User:**
+- Wenn Token bereits verwendet wurde, aber User bereits verifiziert ist
+- Gebe freundliche Nachricht zurück: *"E-Mail bereits bestätigt. Bitte loggen Sie sich ein"*
+- Verhindert Verwirrung beim mehrfachen Klick auf den Link
+
+**2. `resendVerificationEmail` - E-Mail erneut senden**
+
+```php
+POST /api.php { action: "resendVerificationEmail", email }
+
+Ablauf:
+- User per E-Mail finden
+- Prüfen ob bereits verifiziert (dann Erfolg, aber keine E-Mail senden)
+- Alte Tokens löschen
+- Neuen Token generieren und speichern
+- E-Mail erneut senden
+- Rate-Limiting: 3 Versuche pro 10 Minuten
+
+Response (immer Erfolg für E-Mail-Enumeration-Schutz):
+- { success: true, data: { message: "Falls ein Account existiert..." } }
+```
+
+**3. `registerUser` - Registrierung modifiziert**
+
+```php
+Änderungen:
+- Auto-Login ENTFERNT
+- Token generieren (bin2hex(random_bytes(32)))
+- Token in DB speichern (Gültigkeit: 24 Stunden)
+- Verifizierungs-E-Mail senden
+- Response: { message: "Registrierung erfolgreich! Bitte prüfen Sie Ihre E-Mails." }
+```
+
+**4. `loginUser` - Login-Schutz**
+
+```php
+Änderungen:
+- is_email_verified zum SELECT hinzugefügt
+- Prüfung nach Passwort-Verifizierung:
+
+if (!$user['is_email_verified']) {
+    jsonError('E-Mail-Adresse noch nicht bestätigt. Bitte prüfen Sie Ihre E-Mails.', 403);
+}
+```
+
+---
+
+### E-Mail-Template (`mailer.php`)
+
+**Neue Funktion: `sendVerificationEmail()`**
+
+```php
+function sendVerificationEmail(string $email, string $token): void
+{
+    $mail = new PHPMailer(true);
+
+    // SMTP-Konfiguration (wie bei sendPasswordResetEmail)
+    $mail->isSMTP();
+    $mail->Host = SMTP_HOST;
+    // ... (siehe Passwort-Reset)
+
+    // Verifizierungslink
+    $verifyLink = APP_URL . '?verify_email=' . urlencode($token);
+
+    $mail->Subject = 'E-Mail-Adresse bestätigen - MikesMarkdown';
+    $mail->Body = '
+        <html>
+        <body style="font-family: Arial, sans-serif; line-height: 1.6;">
+            <h2 style="background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+                       -webkit-background-clip: text; color: transparent;">
+                Willkommen bei MikesMarkdown!
+            </h2>
+            <p>Vielen Dank für Ihre Registrierung.</p>
+            <p>Bitte bestätigen Sie Ihre E-Mail-Adresse:</p>
+            <p style="margin: 30px 0;">
+                <a href="' . htmlspecialchars($verifyLink) . '"
+                   style="background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+                          color: white; padding: 14px 28px; text-decoration: none;
+                          border-radius: 8px; display: inline-block; font-weight: 600;">
+                    E-Mail-Adresse bestätigen
+                </a>
+            </p>
+            <p style="color: #6b7280; font-size: 14px;">
+                Dieser Link ist 24 Stunden gültig.<br>
+                Falls Sie sich nicht registriert haben, ignorieren Sie diese E-Mail.
+            </p>
+            <p style="color: #6b7280; font-size: 12px; margin-top: 30px;">
+                Alternativ-Link:<br>
+                <a href="' . htmlspecialchars($verifyLink) . '">'
+                   . htmlspecialchars($verifyLink) . '</a>
+            </p>
+        </body>
+        </html>
+    ';
+
+    $mail->send();
+}
+```
+
+**Unterschiede zu Passwort-Reset:**
+- Token-Gültigkeit: 24 Stunden (statt 1 Stunde)
+- Link-Format: `?verify_email=TOKEN` (statt `?reset_token=TOKEN`)
+- Betreff: "E-Mail-Adresse bestätigen"
+- Freundlicherer Ton (Willkommensnachricht)
+
+---
+
+### Frontend-Implementierung
+
+#### HTML-Änderungen (`index.html`)
+
+**1. Login-Form erweitert:**
+
+```html
+<form class="auth-form" id="login-form">
+  <h2>Anmelden</h2>
+  <div class="auth-error" id="login-error" style="display:none;"></div>
+  <div class="auth-success" id="login-success" style="display:none;"></div> <!-- NEU -->
+  <!-- ... -->
+</form>
+```
+
+**2. Registrierungs-Success-Message:**
+
+```html
+<form class="auth-form" id="register-form" style="display:none;">
+  <h2>Registrieren</h2>
+  <div class="auth-error" id="register-error" style="display:none;"></div>
+  <div class="auth-success" id="register-success" style="display:none;"></div> <!-- NEU -->
+  <!-- ... -->
+</form>
+```
+
+**3. Resend-Verification-Form:**
+
+```html
+<form class="auth-form" id="resend-verification-form" style="display:none;">
+  <h2>Verifizierungs-E-Mail erneut senden</h2>
+  <div class="auth-error" id="resend-verification-error" style="display:none;"></div>
+  <div class="auth-success" id="resend-verification-success" style="display:none;"></div>
+  <div class="form-group">
+    <label for="resend-email">E-Mail-Adresse</label>
+    <input type="email" id="resend-email" required autocomplete="email" />
+  </div>
+  <button type="submit" class="primary">E-Mail erneut senden</button>
+  <p class="auth-switch">
+    <button type="button" class="link-btn" id="back-to-login-resend">
+      Zurück zur Anmeldung
+    </button>
+  </p>
+</form>
+```
+
+#### JavaScript-Änderungen (`app.js`)
+
+**1. Neue Variablen:**
+
+```javascript
+const loginSuccess = $("#login-success");  // NEU
+const registerSuccess = $("#register-success");
+const resendVerificationForm = $("#resend-verification-form");
+const resendVerificationError = $("#resend-verification-error");
+const resendVerificationSuccess = $("#resend-verification-success");
+```
+
+**2. `handleRegister()` modifiziert:**
+
+```javascript
+async function handleRegister(e) {
+  e.preventDefault();
+  hideAuthError(registerError);
+
+  const username = $("#register-username").value.trim();
+  const email = $("#register-email").value.trim();
+  const password = $("#register-password").value;
+
+  try {
+    const data = await apiPost("register", { username, email, password });
+
+    // KEIN Auto-Login mehr!
+    registerForm.reset();
+    showAuthSuccess(registerSuccess,
+      `Registrierung erfolgreich! Wir haben eine Verifizierungs-E-Mail an ${data.email} gesendet. ` +
+      `Bitte prüfen Sie Ihr Postfach.`
+    );
+  } catch (err) {
+    showAuthError(registerError, err.message);
+  }
+}
+```
+
+**3. Neue Funktion: `handleEmailVerification()`**
+
+```javascript
+async function handleEmailVerification(token) {
+  try {
+    showAuth();
+    showLoginForm();
+    hideAuthError(loginError);
+
+    // Show verifying message
+    const verifyingMsg = document.createElement('div');
+    verifyingMsg.className = 'auth-success';
+    verifyingMsg.textContent = 'E-Mail-Adresse wird verifiziert...';
+    verifyingMsg.style.display = 'block';
+    loginForm.insertBefore(verifyingMsg, loginForm.firstChild);
+
+    const data = await apiPost("verifyEmail", { token });
+
+    verifyingMsg.remove();
+
+    // Show success message (NO auto-login)
+    showAuthSuccess(loginSuccess, data.message);
+
+  } catch (err) {
+    showAuthError(loginError, err.message);
+
+    // If expired, offer resend option
+    if (err.message.includes('abgelaufen') || err.message.includes('Ungültig')) {
+      const resendLink = document.createElement('a');
+      resendLink.textContent = 'Verifizierungs-E-Mail erneut senden';
+      resendLink.className = 'link-btn';
+      resendLink.style.display = 'block';
+      resendLink.style.marginTop = '10px';
+      resendLink.href = '#';
+      resendLink.onclick = (e) => {
+        e.preventDefault();
+        showResendVerificationForm();
+      };
+      loginError.appendChild(resendLink);
+    }
+  }
+}
+```
+
+**4. Neue Funktion: `handleResendVerification()`**
+
+```javascript
+async function handleResendVerification(e) {
+  e.preventDefault();
+  hideAuthError(resendVerificationError);
+  hideAuthSuccess(resendVerificationSuccess);
+
+  const email = $("#resend-email").value.trim();
+
+  try {
+    const data = await apiPost("resendVerificationEmail", { email });
+    resendVerificationForm.reset();
+    showAuthSuccess(resendVerificationSuccess, data.message);
+
+    // Redirect to login after 3 seconds
+    setTimeout(() => showLoginForm(), 3000);
+  } catch (err) {
+    showAuthError(resendVerificationError, err.message);
+  }
+}
+```
+
+**5. URL-Parameter-Handler:**
+
+```javascript
+// Check for verify_email parameter
+const urlParams = new URLSearchParams(window.location.search);
+const verifyToken = urlParams.get("verify_email");
+if (verifyToken) {
+  handleEmailVerification(verifyToken);
+  window.history.replaceState({}, document.title, window.location.pathname);
+}
+```
+
+**6. Login-Fehlerbehandlung erweitert:**
+
+```javascript
+async function handleLogin(e) {
+  e.preventDefault();
+  hideAuthError(loginError);
+
+  const email = $("#login-email").value.trim();
+  const password = $("#login-password").value;
+
+  try {
+    const data = await apiPost("login", { email, password });
+    currentUser = data;
+    loginForm.reset();
+    showApp();
+  } catch (err) {
+    showAuthError(loginError, err.message);
+
+    // Show resend link if email not verified
+    if (err.message.includes('nicht bestätigt')) {
+      const resendLink = document.createElement('a');
+      resendLink.textContent = 'Verifizierungs-E-Mail erneut senden';
+      resendLink.className = 'link-btn';
+      resendLink.style.display = 'block';
+      resendLink.style.marginTop = '10px';
+      resendLink.onclick = (e) => {
+        e.preventDefault();
+        $("#resend-email").value = $("#login-email").value;
+        showResendVerificationForm();
+      };
+      loginError.appendChild(resendLink);
+    }
+  }
+}
+```
+
+---
+
+### Lessons Learned & Design Decisions
+
+#### ❌ **Verworfener Ansatz: Auto-Login nach Verifizierung**
+
+**Ursprünglicher Plan:**
+- User klickt auf Verifizierungslink → automatischer Login → App wird geladen
+
+**Probleme:**
+1. **Race Condition:** `checkSession()` und `handleEmailVerification()` liefen parallel beim Page Load
+   - `checkSession()` erstellte leere Session
+   - `verifyEmail()` erstellte Session mit User-Daten
+   - Die leere Session "gewann" und wurde für nachfolgende Requests verwendet
+
+2. **Session-Cookie-Probleme:**
+   - `SameSite=Strict` blockierte Cookies von E-Mail-Links (Top-Level-Navigation)
+   - Wechsel zu `SameSite=Lax` half, aber Race Condition blieb
+
+3. **Komplexität:**
+   - Mehrere Debugging-Sessions erforderlich
+   - Code wurde komplizierter mit Workarounds
+
+**Lösung: Kompletten Auto-Login entfernen**
+
+#### ✅ **Finaler Ansatz: Manuelle Anmeldung**
+
+**Vorteile:**
+- ✅ **Keine Race Conditions** (kein Konflikt zwischen `checkSession()` und `verifyEmail()`)
+- ✅ **Keine Session-Cookie-Probleme** (Session wird erst beim Login erstellt)
+- ✅ **Einfacherer Code** (weniger Edge Cases)
+- ✅ **Klarer User-Flow** (User weiß genau, was zu tun ist)
+- ✅ **Konsistent** mit Passwort-Reset (der auch kein Auto-Login macht)
+- ✅ **Sicherer** (User muss Passwort erneut eingeben)
+
+**Trade-off:**
+- Ein zusätzlicher Schritt für den User (manuelle Anmeldung)
+- Aber: Klarheit > Convenience
+
+---
+
+### Security-Features
+
+#### Token-Sicherheit
+
+**1. Token-Generierung:**
+```php
+$token = bin2hex(random_bytes(32)); // 64 Zeichen Hex = 256 Bit Entropie
+```
+
+**2. Token-Ablauf:**
+- **Gültigkeit:** 24 Stunden (länger als Passwort-Reset wegen weniger Dringlichkeit)
+- **Prüfung:** `WHERE expires > NOW() AND used = 0`
+
+**3. Token-Wiederverwendung:**
+- Nach Verifizierung: `used = 1`
+- Bei Resend: Alte Tokens werden gelöscht, neuer Token generiert
+
+**4. Rate-Limiting:**
+- `verifyEmail`: 10 Versuche pro 10 Minuten
+- `resendVerificationEmail`: 3 Versuche pro 10 Minuten
+
+#### E-Mail-Enumeration-Schutz
+
+**Bei Resend:**
+```php
+// Immer "Erfolg" zurückgeben, auch wenn E-Mail nicht existiert
+jsonSuccess([
+    'message' => 'Falls ein Account mit dieser E-Mail existiert, ' .
+                 'wurde eine Verifizierungs-E-Mail gesendet.'
+]);
+```
+
+**Verhindert:**
+- Angreifer können nicht testen, welche E-Mails registriert sind
+- Datenschutz wird gewahrt
+
+#### Login-Schutz
+
+**Unverifizierte User können sich nicht einloggen:**
+```php
+if (!$user['is_email_verified']) {
+    jsonError('E-Mail-Adresse noch nicht bestätigt. Bitte prüfen Sie Ihre E-Mails.', 403);
+}
+```
+
+**Wichtig:** Fehlermeldung ist informativ (keine Sicherheitslücke), da User bereits Passwort kennt
+
+---
+
+### Testing-Checkliste
+
+#### ✅ **Erfolgreiche Tests**
+
+**1. Registrierung:**
+- [x] Neuer User registriert
+- [x] Keine Auto-Login
+- [x] Erfolgsmeldung angezeigt
+- [x] E-Mail erhalten
+- [x] Datenbank: `is_email_verified = 0`, Token in `email_verification_tokens`
+
+**2. E-Mail-Verifizierung:**
+- [x] Link geklickt
+- [x] Erfolgsmeldung: "Danke. Ihre E-Mail ist bestätigt..."
+- [x] Login-Formular sichtbar
+- [x] Datenbank: `is_email_verified = 1`, `email_verified_at` gesetzt, `used = 1`
+
+**3. Manueller Login:**
+- [x] E-Mail + Passwort eingegeben
+- [x] Login erfolgreich
+- [x] App geladen
+- [x] Session erstellt
+
+**4. Login-Schutz (unverifizierte User):**
+- [x] Neuer User registriert (NICHT verifiziert)
+- [x] Login-Versuch
+- [x] Fehlermeldung: "E-Mail-Adresse noch nicht bestätigt"
+- [x] Resend-Link erscheint
+
+**5. Token-Ablauf:**
+- [x] Token manuell abgelaufen gesetzt
+- [x] Verifizierungslink geklickt
+- [x] Fehlermeldung: "Ungültiger oder abgelaufener Verifizierungslink"
+- [x] Resend-Link erscheint
+
+**6. Token-Wiederverwendung:**
+- [x] Bereits verifizierter User klickt Link erneut
+- [x] Freundliche Nachricht: "E-Mail bereits bestätigt. Bitte loggen Sie sich ein"
+- [x] Kein Fehler
+
+**7. E-Mail erneut senden:**
+- [x] Resend-Formular genutzt
+- [x] Neue E-Mail erhalten
+- [x] Alter Token gelöscht (Datenbank)
+- [x] Neuer Token funktioniert
+
+**8. Rate-Limiting:**
+- [x] Mehrfache Resend-Versuche (> 3 in 10 Min)
+- [x] 429 Too Many Requests nach 3. Versuch
+
+**9. Edge Cases:**
+- [x] Registrierung mit bereits registrierter E-Mail → Fehler
+- [x] Ungültiger Token → Fehler
+- [x] Leerer Token → Fehler
+- [x] Token mit SQL-Injection-Versuch → Kein Effekt (Prepared Statements)
+
+---
+
+### Performance-Optimierung
+
+**Datenbank-Indizes:**
+```sql
+-- Schnelle Token-Suche
+INDEX idx_token (token)
+
+-- Schnelle User-Zuordnung
+INDEX idx_user_id (user_id)
+
+-- Cleanup abgelaufener Tokens
+INDEX idx_expires (expires)
+
+-- Login-Prüfung
+INDEX idx_email_verified (is_email_verified)
+```
+
+**Token-Cleanup (optional):**
+```php
+// Cronjob: Alte Tokens löschen (älter als 7 Tage)
+DELETE FROM email_verification_tokens
+WHERE created < DATE_SUB(NOW(), INTERVAL 7 DAY);
+```
+
+---
+
+### Migration-Guide für bestehende Systeme
+
+**Schritt 1: Datenbank aktualisieren**
+```bash
+php setup_pw.php
+```
+
+**Schritt 2: Bestehende User verifizieren**
+```sql
+UPDATE users SET is_email_verified = 1 WHERE id > 0;
+```
+
+**Schritt 3: Frontend deployen**
+- `index.html` (neue Formulare)
+- `app.js` (neue Handler)
+
+**Schritt 4: Backend deployen**
+- `api.php` (neue Endpoints)
+- `mailer.php` (neue E-Mail-Funktion)
+
+**Schritt 5: Testen**
+- Neue Registrierung testen
+- Verifizierung testen
+- Login testen
+
+**Wichtig:** Bestehende User bleiben eingeloggt und funktionsfähig!
+
+---
+
+### Troubleshooting
+
+#### Problem: "loginSuccess is not defined"
+
+**Symptom:** JavaScript-Fehler in Browser-Konsole
+
+**Ursache:** HTML-Element `<div id="login-success">` fehlt
+
+**Lösung:**
+```html
+<!-- In index.html nach <div id="login-error"> hinzufügen: -->
+<div class="auth-success" id="login-success" style="display:none;"></div>
+```
+
+```javascript
+// In app.js bei Variablen-Definitionen hinzufügen:
+const loginSuccess = $("#login-success");
+```
+
+---
+
+#### Problem: E-Mail kommt nicht an
+
+**Checkliste:**
+1. ✅ SMTP-Credentials in `.env` korrekt?
+2. ✅ `sendVerificationEmail()` in `mailer.php` definiert?
+3. ✅ PHPMailer installiert? (`vendor/phpmailer/`)
+4. ✅ Spam-Ordner prüfen
+5. ✅ Logs prüfen: `logs/security.log`
+
+**Debug-Modus aktivieren:**
+```php
+// In mailer.php temporär hinzufügen:
+$mail->SMTPDebug = 2;
+$mail->Debugoutput = 'error_log';
+```
+
+---
+
+#### Problem: "E-Mail-Adresse noch nicht bestätigt" aber bereits verifiziert
+
+**Ursache:** Cache-Problem oder Datenbank nicht synchronisiert
+
+**Lösung:**
+```sql
+-- Prüfen:
+SELECT id, email, is_email_verified, email_verified_at
+FROM users
+WHERE email = 'user@example.com';
+
+-- Falls is_email_verified = 0 aber sollte = 1:
+UPDATE users
+SET is_email_verified = 1, email_verified_at = NOW()
+WHERE email = 'user@example.com';
+```
+
+---
+
+### Zusammenfassung
+
+**Was wurde erreicht:**
+✅ Vollständige E-Mail-Verifizierung implementiert
+✅ Sicherer, token-basierter Ansatz (24h Gültigkeit)
+✅ Unverifizierte User können sich nicht einloggen
+✅ Freundliche UX (Resend-Option, klare Meldungen)
+✅ E-Mail-Enumeration-Schutz
+✅ Rate-Limiting gegen Missbrauch
+✅ Robuster Code (kein Auto-Login, keine Race Conditions)
+✅ Umfassende Tests durchgeführt
+✅ Dokumentation aktualisiert
+
+**Empfohlene nächste Schritte:**
+1. ⚠️ **Production-Testing** mit echten E-Mail-Adressen
+2. 📊 **Monitoring** aktivieren (Log-Analyse)
+3. 🔄 **Cronjob** für Token-Cleanup einrichten (optional)
+4. 📧 **E-Mail-Template** anpassen (Branding)
+5. 🌐 **Mehrsprachigkeit** erwägen (i18n)
+
+---
+
+**Implementiert von:** Claude Code
+**Datum:** 17. Februar 2026
+**Commits:**
+- `8a6181a` - Fix race condition: Skip checkSession during email verification
+- `5af4a68` - Simplify email verification: Remove auto-login
+- `2c459df` - Fix: Add missing loginSuccess element for email verification
