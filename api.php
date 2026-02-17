@@ -41,9 +41,10 @@ ini_set('session.gc_divisor', '100');     // 1% cleanup probability
 session_start();
 
 // Check session activity for authenticated endpoints only
-// Skip for login/register to avoid interfering with authentication flow
+// Skip for auth-related endpoints to avoid interfering with authentication flow
 $action = $_GET['action'] ?? ($_POST['action'] ?? json_decode(file_get_contents('php://input'), true)['action'] ?? '');
-if (!in_array($action, ['login', 'register', 'session'], true)) {
+$authEndpoints = ['login', 'register', 'session', 'verifyEmail', 'resetPassword', 'requestPasswordReset', 'resendVerificationEmail'];
+if (!in_array($action, $authEndpoints, true)) {
     checkSessionActivity();
 }
 
