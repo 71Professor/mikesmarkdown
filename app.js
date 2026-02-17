@@ -377,9 +377,6 @@
       currentUser = data;
       showApp();
 
-      // Show success notification in app
-      showNotification(data.message || "E-Mail erfolgreich bestätigt!", "success");
-
     } catch (err) {
       // Show error on login form
       showAuthError(loginError, err.message);
