@@ -356,7 +356,7 @@
   async function handleEmailVerification(token) {
     try {
       // Show loading state
-      showAuthPage();
+      showAuth();
       showLoginForm();
       hideAuthError(loginError);
 
