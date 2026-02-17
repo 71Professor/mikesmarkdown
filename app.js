@@ -373,9 +373,8 @@
       // Remove verifying message
       verifyingMsg.remove();
 
-      // Set current user and show app (auto-login)
-      currentUser = data;
-      showApp();
+      // Show success message (no auto-login)
+      showAuthSuccess(loginSuccess, data.message);
 
     } catch (err) {
       // Show error on login form
@@ -1526,12 +1525,7 @@ ${sanitized}
   function init() {
     loadTheme();
     bindAuthEvents();
-
-    // Skip checkSession if verify_email token is present (will be handled by handleEmailVerification)
-    const urlParams = new URLSearchParams(window.location.search);
-    if (!urlParams.has('verify_email')) {
-      checkSession();
-    }
+    checkSession();
   }
 
   init();
