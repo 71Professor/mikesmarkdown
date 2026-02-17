@@ -759,23 +759,15 @@ function verifyEmail(mysqli $db, array $body): void
         $stmt->close();
 
         if ($user && $user['is_email_verified']) {
-            // User is already verified - return success and log in
-            session_regenerate_id(true);
-            $_SESSION['user_id'] = (int) $user['id'];
-            $_SESSION['username'] = $user['username'];
-            $_SESSION['last_activity'] = time();
-
+            // User is already verified - return success message
             $logger = getLogger();
-            $logger->security('Email already verified - auto login', [
+            $logger->security('Email already verified', [
                 'user_id' => $user['id'],
                 'email' => $user['email'],
             ]);
 
             jsonSuccess([
-                'id' => (int) $user['id'],
-                'username' => $user['username'],
-                'email' => $user['email'],
-                'message' => 'E-Mail bereits bestätigt - Sie sind jetzt angemeldet!'
+                'message' => 'E-Mail bereits bestätigt. Bitte loggen Sie sich ein.'
             ]);
         }
 
@@ -790,8 +782,8 @@ function verifyEmail(mysqli $db, array $body): void
     $userId = (int) $tokenRecord['user_id'];
     $tokenId = (int) $tokenRecord['id'];
 
-    // Get user details for auto-login
-    $stmt = $db->prepare("SELECT username, email, is_email_verified FROM users WHERE id = ?");
+    // Get user details for logging
+    $stmt = $db->prepare("SELECT email, is_email_verified FROM users WHERE id = ?");
     $stmt->bind_param('i', $userId);
     $stmt->execute();
     $result = $stmt->get_result();
@@ -804,7 +796,7 @@ function verifyEmail(mysqli $db, array $body): void
 
     // Check if already verified
     if ($user['is_email_verified']) {
-        // Already verified - still log them in
+        // Already verified
         $logger = getLogger();
         $logger->info('Email already verified', ['user_id' => $userId]);
     } else {
@@ -828,12 +820,6 @@ function verifyEmail(mysqli $db, array $body): void
     $stmt->execute();
     $stmt->close();
 
-    // Auto-login after verification
-    session_regenerate_id(true);
-    $_SESSION['user_id'] = $userId;
-    $_SESSION['username'] = $user['username'];
-    $_SESSION['last_activity'] = time();
-
     // Log successful verification
     $logger = getLogger();
     $logger->security('Email verified successfully', [
@@ -842,10 +828,7 @@ function verifyEmail(mysqli $db, array $body): void
     ]);
 
     jsonSuccess([
-        'id' => $userId,
-        'username' => $user['username'],
-        'email' => $user['email'],
-        'message' => 'E-Mail erfolgreich bestätigt!'
+        'message' => 'Danke. Ihre E-Mail ist bestätigt. Loggen Sie sich jetzt auf der Login-Seite ein.'
     ]);
 }
 
