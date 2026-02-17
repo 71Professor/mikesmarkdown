@@ -18,6 +18,7 @@
   const forgotPasswordForm = $("#forgot-password-form");
   const resetPasswordForm = $("#reset-password-form");
   const loginError = $("#login-error");
+  const loginSuccess = $("#login-success");
   const registerError = $("#register-error");
   const registerSuccess = $("#register-success");
   const forgotError = $("#forgot-error");
