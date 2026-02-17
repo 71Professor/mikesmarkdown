@@ -19,15 +19,20 @@
   const resetPasswordForm = $("#reset-password-form");
   const loginError = $("#login-error");
   const registerError = $("#register-error");
+  const registerSuccess = $("#register-success");
   const forgotError = $("#forgot-error");
   const forgotSuccess = $("#forgot-success");
   const resetError = $("#reset-error");
   const resetSuccess = $("#reset-success");
+  const resendVerificationForm = $("#resend-verification-form");
+  const resendVerificationError = $("#resend-verification-error");
+  const resendVerificationSuccess = $("#resend-verification-success");
   const showRegisterBtn = $("#show-register");
   const showLoginBtn = $("#show-login");
   const showForgotPasswordBtn = $("#show-forgot-password");
   const backToLoginBtn = $("#back-to-login");
   const backToLoginBtn2 = $("#back-to-login-2");
+  const backToLoginBtn3 = $("#back-to-login-resend");
   const userGreeting = $("#user-greeting");
   const btnLogout = $("#btn-logout");
   const btnSettings = $("#btn-settings");
@@ -251,12 +256,29 @@
       showApp();
     } catch (err) {
       showAuthError(loginError, err.message);
+
+      // If error is about unverified email, show resend option
+      if (err.message.includes('nicht bestätigt')) {
+        const resendLink = document.createElement('a');
+        resendLink.textContent = 'Verifizierungs-E-Mail erneut senden';
+        resendLink.className = 'link-btn';
+        resendLink.style.display = 'block';
+        resendLink.style.marginTop = '10px';
+        resendLink.href = '#';
+        resendLink.onclick = (e) => {
+          e.preventDefault();
+          $("#resend-email").value = email;
+          showResendVerificationForm();
+        };
+        loginError.appendChild(resendLink);
+      }
     }
   }
 
   async function handleRegister(e) {
     e.preventDefault();
     hideAuthError(registerError);
+    hideAuthSuccess(registerSuccess);
 
     const username = $("#register-username").value.trim();
     const email = $("#register-email").value.trim();
@@ -264,9 +286,11 @@
 
     try {
       const data = await apiPost("register", { username, email, password });
-      currentUser = data;
       registerForm.reset();
-      showApp();
+      showAuthSuccess(registerSuccess,
+        `Registrierung erfolgreich! Wir haben eine Verifizierungs-E-Mail an ${data.email} gesendet. ` +
+        `Bitte prüfen Sie Ihr Postfach und bestätigen Sie Ihre E-Mail-Adresse.`
+      );
     } catch (err) {
       showAuthError(registerError, err.message);
     }
@@ -329,6 +353,75 @@
     }
   }
 
+  async function handleEmailVerification(token) {
+    try {
+      // Show loading state
+      showAuthPage();
+      showLoginForm();
+      hideAuthError(loginError);
+
+      // Show "Verifying..." message
+      const verifyingMsg = document.createElement('div');
+      verifyingMsg.className = 'auth-success';
+      verifyingMsg.textContent = 'E-Mail-Adresse wird verifiziert...';
+      verifyingMsg.style.display = 'block';
+      loginForm.insertBefore(verifyingMsg, loginForm.firstChild);
+
+      // Call API to verify
+      const data = await apiPost("verifyEmail", { token });
+
+      // Remove verifying message
+      verifyingMsg.remove();
+
+      // Set current user and show app (auto-login)
+      currentUser = data;
+      showApp();
+
+      // Show success notification in app
+      showNotification(data.message || "E-Mail erfolgreich bestätigt!", "success");
+
+    } catch (err) {
+      // Show error on login form
+      showAuthError(loginError, err.message);
+
+      // If expired, offer resend option
+      if (err.message.includes('abgelaufen') || err.message.includes('Ungültig')) {
+        const resendLink = document.createElement('a');
+        resendLink.textContent = 'Verifizierungs-E-Mail erneut senden';
+        resendLink.className = 'link-btn';
+        resendLink.style.display = 'block';
+        resendLink.style.marginTop = '10px';
+        resendLink.href = '#';
+        resendLink.onclick = (e) => {
+          e.preventDefault();
+          showResendVerificationForm();
+        };
+        loginError.appendChild(resendLink);
+      }
+    }
+  }
+
+  async function handleResendVerification(e) {
+    e.preventDefault();
+    hideAuthError(resendVerificationError);
+    hideAuthSuccess(resendVerificationSuccess);
+
+    const email = $("#resend-email").value.trim();
+
+    try {
+      const data = await apiPost("resendVerificationEmail", { email });
+      resendVerificationForm.reset();
+      showAuthSuccess(resendVerificationSuccess, data.message);
+
+      // Redirect to login after 3 seconds
+      setTimeout(() => {
+        showLoginForm();
+      }, 3000);
+    } catch (err) {
+      showAuthError(resendVerificationError, err.message);
+    }
+  }
+
   async function handleChangePassword(e) {
     e.preventDefault();
     hideAuthError(changePasswordError);
@@ -362,12 +455,16 @@
     registerForm.style.display = "none";
     forgotPasswordForm.style.display = "none";
     resetPasswordForm.style.display = "none";
+    resendVerificationForm.style.display = "none";
     hideAuthError(loginError);
     hideAuthError(registerError);
+    hideAuthSuccess(registerSuccess);
     hideAuthError(forgotError);
     hideAuthSuccess(forgotSuccess);
     hideAuthError(resetError);
     hideAuthSuccess(resetSuccess);
+    hideAuthError(resendVerificationError);
+    hideAuthSuccess(resendVerificationSuccess);
   }
 
   function showRegisterForm() {
@@ -375,8 +472,10 @@
     registerForm.style.display = "";
     forgotPasswordForm.style.display = "none";
     resetPasswordForm.style.display = "none";
+    resendVerificationForm.style.display = "none";
     hideAuthError(loginError);
     hideAuthError(registerError);
+    hideAuthSuccess(registerSuccess);
   }
 
   function showForgotPasswordForm() {
@@ -384,6 +483,7 @@
     registerForm.style.display = "none";
     forgotPasswordForm.style.display = "";
     resetPasswordForm.style.display = "none";
+    resendVerificationForm.style.display = "none";
     hideAuthError(forgotError);
     hideAuthSuccess(forgotSuccess);
   }
@@ -395,6 +495,16 @@
     resetPasswordForm.style.display = "";
     hideAuthError(resetError);
     hideAuthSuccess(resetSuccess);
+  }
+
+  function showResendVerificationForm() {
+    loginForm.style.display = "none";
+    registerForm.style.display = "none";
+    forgotPasswordForm.style.display = "none";
+    resetPasswordForm.style.display = "none";
+    resendVerificationForm.style.display = "";
+    hideAuthError(resendVerificationError);
+    hideAuthSuccess(resendVerificationSuccess);
   }
 
   function showChangePasswordModal() {
@@ -1202,6 +1312,7 @@ ${sanitized}
     registerForm.addEventListener("submit", handleRegister);
     forgotPasswordForm.addEventListener("submit", handleForgotPassword);
     resetPasswordForm.addEventListener("submit", handleResetPassword);
+    resendVerificationForm.addEventListener("submit", handleResendVerification);
     changePasswordForm.addEventListener("submit", handleChangePassword);
 
     showRegisterBtn.addEventListener("click", showRegisterForm);
@@ -1209,6 +1320,7 @@ ${sanitized}
     showForgotPasswordBtn.addEventListener("click", showForgotPasswordForm);
     backToLoginBtn.addEventListener("click", showLoginForm);
     backToLoginBtn2.addEventListener("click", showLoginForm);
+    backToLoginBtn3.addEventListener("click", showLoginForm);
 
     btnLogout.addEventListener("click", handleLogout);
     btnSettings.addEventListener("click", showChangePasswordModal);
@@ -1230,6 +1342,14 @@ ${sanitized}
     if (resetToken) {
       $("#reset-token").value = resetToken;
       showResetPasswordForm();
+      // Clean URL
+      window.history.replaceState({}, document.title, window.location.pathname);
+    }
+
+    // Check for verification token in URL (for email links)
+    const verifyToken = urlParams.get("verify_email");
+    if (verifyToken) {
+      handleEmailVerification(verifyToken);
       // Clean URL
       window.history.replaceState({}, document.title, window.location.pathname);
     }

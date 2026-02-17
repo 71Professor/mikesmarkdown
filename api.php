@@ -310,6 +310,12 @@ if ($method === 'GET') {
         case 'resetPassword':
             resetPassword($db, $body);
             break;
+        case 'verifyEmail':
+            verifyEmail($db, $body);
+            break;
+        case 'resendVerificationEmail':
+            resendVerificationEmail($db, $body);
+            break;
 
         // Auth actions (auth required)
         case 'changePassword':
@@ -404,23 +410,50 @@ function registerUser(mysqli $db, array $body): void
     $userId = (int) $stmt->insert_id;
     $stmt->close();
 
-    // Auto-login after registration
-    $_SESSION['user_id'] = $userId;
-    $_SESSION['username'] = $username;
-    $_SESSION['last_activity'] = time();  // Initialize activity tracking
+    // Generate email verification token
+    $token = bin2hex(random_bytes(32));
+    $now = gmdate('Y-m-d H:i:s');
+    $expires = gmdate('Y-m-d H:i:s', time() + 86400); // 24 hours
 
-    // Log successful registration for audit trail
+    // Insert verification token
+    $stmt = $db->prepare("INSERT INTO email_verification_tokens (user_id, token, created, expires) VALUES (?, ?, ?, ?)");
+    $stmt->bind_param('isss', $userId, $token, $now, $expires);
+
+    if (!$stmt->execute()) {
+        $logger = getLogger();
+        $logger->databaseError('email verification token creation', $db, ['user_id' => $userId]);
+        $stmt->close();
+        jsonError('Registrierung fehlgeschlagen', 500);
+    }
+    $stmt->close();
+
+    // Send verification email with error handling
+    try {
+        sendVerificationEmail($email, $token);
+        $logger = getLogger();
+        $logger->info('Verification email sent', ['user_id' => $userId, 'email' => $email]);
+    } catch (Exception $e) {
+        $logger = getLogger();
+        $logger->error('Failed to send verification email', [
+            'user_id' => $userId,
+            'email' => $email,
+            'exception' => $e->getMessage()
+        ]);
+        // IMPORTANT: Still return success to prevent email enumeration
+    }
+
+    // Log successful registration (pending verification) for audit trail
     $logger = getLogger();
-    $logger->security('New user registered', [
+    $logger->security('New user registered - pending verification', [
         'user_id' => $userId,
         'username' => $username,
         'email' => $email,
     ]);
 
+    // Modified response - no auto-login, user must verify email first
     jsonSuccess([
-        'id' => $userId,
-        'username' => $username,
-        'email' => $email,
+        'message' => 'Registrierung erfolgreich! Bitte prüfen Sie Ihre E-Mails zur Bestätigung.',
+        'email' => $email
     ]);
 }
 
@@ -435,7 +468,7 @@ function loginUser(mysqli $db, array $body): void
         jsonError('E-Mail und Passwort sind erforderlich', 400);
     }
 
-    $stmt = $db->prepare("SELECT id, username, email, password_hash FROM users WHERE email = ?");
+    $stmt = $db->prepare("SELECT id, username, email, password_hash, is_email_verified FROM users WHERE email = ?");
     $stmt->bind_param('s', $email);
     $stmt->execute();
     $result = $stmt->get_result();
@@ -450,6 +483,16 @@ function loginUser(mysqli $db, array $body): void
             'reason' => !$user ? 'user_not_found' : 'invalid_password',
         ]);
         jsonError('Ungültige Anmeldedaten', 401);
+    }
+
+    // Check if email is verified
+    if (!$user['is_email_verified']) {
+        $logger = getLogger();
+        $logger->security('Login attempt with unverified email', [
+            'user_id' => (int) $user['id'],
+            'email' => $email,
+        ]);
+        jsonError('E-Mail-Adresse noch nicht bestätigt. Bitte prüfen Sie Ihre E-Mails.', 403);
     }
 
     // Regenerate session to prevent fixation
@@ -675,6 +718,172 @@ function resetPassword(mysqli $db, array $body): void
     ]);
 
     jsonSuccess(['message' => 'Passwort erfolgreich zurückgesetzt']);
+}
+
+function verifyEmail(mysqli $db, array $body): void
+{
+    checkRateLimit($db, 'email_verification', 10, 600); // 10 attempts per 10 minutes
+
+    $token = trim($body['token'] ?? '');
+
+    if ($token === '') {
+        jsonError('Verifizierungstoken ist erforderlich', 400);
+    }
+
+    // Find valid, unused token
+    $now = gmdate('Y-m-d H:i:s');
+    $stmt = $db->prepare(
+        "SELECT id, user_id FROM email_verification_tokens
+         WHERE token = ? AND expires > ? AND used = 0"
+    );
+    $stmt->bind_param('ss', $token, $now);
+    $stmt->execute();
+    $result = $stmt->get_result();
+    $tokenRecord = $result->fetch_assoc();
+    $stmt->close();
+
+    if (!$tokenRecord) {
+        $logger = getLogger();
+        $logger->security('Invalid or expired email verification token used', [
+            'token_prefix' => substr($token, 0, 8) . '...',
+        ]);
+        jsonError('Ungültiger oder abgelaufener Verifizierungslink', 400);
+    }
+
+    $userId = (int) $tokenRecord['user_id'];
+    $tokenId = (int) $tokenRecord['id'];
+
+    // Get user details for auto-login
+    $stmt = $db->prepare("SELECT username, email, is_email_verified FROM users WHERE id = ?");
+    $stmt->bind_param('i', $userId);
+    $stmt->execute();
+    $result = $stmt->get_result();
+    $user = $result->fetch_assoc();
+    $stmt->close();
+
+    if (!$user) {
+        jsonError('Benutzer nicht gefunden', 404);
+    }
+
+    // Check if already verified
+    if ($user['is_email_verified']) {
+        // Already verified - still log them in
+        $logger = getLogger();
+        $logger->info('Email already verified', ['user_id' => $userId]);
+    } else {
+        // Mark email as verified
+        $verifiedAt = gmdate('Y-m-d H:i:s');
+        $stmt = $db->prepare("UPDATE users SET is_email_verified = 1, email_verified_at = ? WHERE id = ?");
+        $stmt->bind_param('si', $verifiedAt, $userId);
+
+        if (!$stmt->execute()) {
+            $logger = getLogger();
+            $logger->databaseError('email verification', $db, ['user_id' => $userId]);
+            $stmt->close();
+            jsonError('Fehler bei der E-Mail-Verifizierung', 500);
+        }
+        $stmt->close();
+    }
+
+    // Mark token as used
+    $stmt = $db->prepare("UPDATE email_verification_tokens SET used = 1 WHERE id = ?");
+    $stmt->bind_param('i', $tokenId);
+    $stmt->execute();
+    $stmt->close();
+
+    // Auto-login after verification
+    session_regenerate_id(true);
+    $_SESSION['user_id'] = $userId;
+    $_SESSION['username'] = $user['username'];
+    $_SESSION['last_activity'] = time();
+
+    // Log successful verification
+    $logger = getLogger();
+    $logger->security('Email verified successfully', [
+        'user_id' => $userId,
+        'email' => $user['email'],
+    ]);
+
+    jsonSuccess([
+        'id' => $userId,
+        'username' => $user['username'],
+        'email' => $user['email'],
+        'message' => 'E-Mail erfolgreich bestätigt!'
+    ]);
+}
+
+function resendVerificationEmail(mysqli $db, array $body): void
+{
+    checkRateLimit($db, 'resend_verification', 3, 600); // 3 attempts per 10 minutes
+
+    $email = trim($body['email'] ?? '');
+
+    if ($email === '' || !filter_var($email, FILTER_VALIDATE_EMAIL)) {
+        jsonError('Gültige E-Mail-Adresse ist erforderlich', 400);
+    }
+
+    // Find user by email
+    $stmt = $db->prepare("SELECT id, username, is_email_verified FROM users WHERE email = ?");
+    $stmt->bind_param('s', $email);
+    $stmt->execute();
+    $result = $stmt->get_result();
+    $user = $result->fetch_assoc();
+    $stmt->close();
+
+    // Always return success to prevent email enumeration
+    if (!$user) {
+        $logger = getLogger();
+        $logger->info('Verification resend requested for non-existent email', ['email' => $email]);
+        jsonSuccess(['message' => 'Falls ein Konto mit dieser E-Mail-Adresse existiert, wurde eine Verifizierungs-E-Mail gesendet.']);
+        return;
+    }
+
+    $userId = (int) $user['id'];
+
+    // Check if already verified
+    if ($user['is_email_verified']) {
+        jsonError('E-Mail-Adresse bereits verifiziert', 400);
+    }
+
+    // Delete existing tokens for this user
+    $stmt = $db->prepare("DELETE FROM email_verification_tokens WHERE user_id = ?");
+    $stmt->bind_param('i', $userId);
+    $stmt->execute();
+    $stmt->close();
+
+    // Generate new token
+    $token = bin2hex(random_bytes(32));
+    $now = gmdate('Y-m-d H:i:s');
+    $expires = gmdate('Y-m-d H:i:s', time() + 86400); // 24 hours
+
+    // Insert new token
+    $stmt = $db->prepare("INSERT INTO email_verification_tokens (user_id, token, created, expires) VALUES (?, ?, ?, ?)");
+    $stmt->bind_param('isss', $userId, $token, $now, $expires);
+
+    if (!$stmt->execute()) {
+        $logger = getLogger();
+        $logger->databaseError('verification token recreation', $db, ['user_id' => $userId]);
+        $stmt->close();
+        jsonError('Fehler beim Erstellen des Verifizierungstokens', 500);
+    }
+    $stmt->close();
+
+    // Send verification email
+    try {
+        sendVerificationEmail($email, $token);
+        $logger = getLogger();
+        $logger->info('Verification email resent', ['user_id' => $userId, 'email' => $email]);
+    } catch (Exception $e) {
+        $logger = getLogger();
+        $logger->error('Failed to resend verification email', [
+            'user_id' => $userId,
+            'email' => $email,
+            'exception' => $e->getMessage()
+        ]);
+        // Still return success to prevent email enumeration
+    }
+
+    jsonSuccess(['message' => 'Falls ein Konto mit dieser E-Mail-Adresse existiert, wurde eine Verifizierungs-E-Mail gesendet.']);
 }
 
 function changePassword(mysqli $db, int $userId, array $body): void
