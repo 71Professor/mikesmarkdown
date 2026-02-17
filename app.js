@@ -1526,7 +1526,12 @@ ${sanitized}
   function init() {
     loadTheme();
     bindAuthEvents();
-    checkSession();
+
+    // Skip checkSession if verify_email token is present (will be handled by handleEmailVerification)
+    const urlParams = new URLSearchParams(window.location.search);
+    if (!urlParams.has('verify_email')) {
+      checkSession();
+    }
   }
 
   init();
