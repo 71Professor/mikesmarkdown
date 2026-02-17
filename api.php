@@ -25,7 +25,7 @@ require_once __DIR__ . '/config.php';
 // ── Session (hardened cookie settings) ────────────
 
 ini_set('session.cookie_httponly', '1');
-ini_set('session.cookie_samesite', 'Strict');
+ini_set('session.cookie_samesite', 'Lax');  // Lax allows cookies on top-level navigations (email links)
 ini_set('session.use_strict_mode', '1');
 if (!empty($_SERVER['HTTPS']) && $_SERVER['HTTPS'] !== 'off') {
     ini_set('session.cookie_secure', '1');
@@ -723,14 +723,6 @@ function resetPassword(mysqli $db, array $body): void
 
 function verifyEmail(mysqli $db, array $body): void
 {
-    // DEBUG: Log function entry
-    $logger = getLogger();
-    $logger->info('verifyEmail() called', [
-        'token_provided' => !empty($body['token'] ?? ''),
-        'session_before' => $_SESSION,
-        'session_id_before' => session_id(),
-    ]);
-
     checkRateLimit($db, 'email_verification', 10, 600); // 10 attempts per 10 minutes
 
     $token = trim($body['token'] ?? '');
@@ -752,6 +744,42 @@ function verifyEmail(mysqli $db, array $body): void
     $stmt->close();
 
     if (!$tokenRecord) {
+        // Token could be already used - check if user is already verified
+        $stmt = $db->prepare("
+            SELECT u.id, u.username, u.email, u.is_email_verified
+            FROM email_verification_tokens evt
+            INNER JOIN users u ON u.id = evt.user_id
+            WHERE evt.token = ?
+            LIMIT 1
+        ");
+        $stmt->bind_param('s', $token);
+        $stmt->execute();
+        $result = $stmt->get_result();
+        $user = $result->fetch_assoc();
+        $stmt->close();
+
+        if ($user && $user['is_email_verified']) {
+            // User is already verified - return success and log in
+            session_regenerate_id(true);
+            $_SESSION['user_id'] = (int) $user['id'];
+            $_SESSION['username'] = $user['username'];
+            $_SESSION['last_activity'] = time();
+
+            $logger = getLogger();
+            $logger->security('Email already verified - auto login', [
+                'user_id' => $user['id'],
+                'email' => $user['email'],
+            ]);
+
+            jsonSuccess([
+                'id' => (int) $user['id'],
+                'username' => $user['username'],
+                'email' => $user['email'],
+                'message' => 'E-Mail bereits bestätigt - Sie sind jetzt angemeldet!'
+            ]);
+        }
+
+        // Invalid or expired token
         $logger = getLogger();
         $logger->security('Invalid or expired email verification token used', [
             'token_prefix' => substr($token, 0, 8) . '...',
@@ -806,13 +834,11 @@ function verifyEmail(mysqli $db, array $body): void
     $_SESSION['username'] = $user['username'];
     $_SESSION['last_activity'] = time();
 
-    // Log successful verification WITH session details
+    // Log successful verification
     $logger = getLogger();
-    $logger->security('Email verified successfully - AUTO LOGIN', [
+    $logger->security('Email verified successfully', [
         'user_id' => $userId,
         'email' => $user['email'],
-        'session_id' => session_id(),
-        'session_data' => $_SESSION,
     ]);
 
     jsonSuccess([
