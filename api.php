@@ -419,16 +419,13 @@ tags: tutorial, markdown, willkommen
 
 # how-to-markdown
 
-Diese Notiz zeigt dir die wichtigsten Formatierungsmöglichkeiten von Markdown.
-Wähle den Split-View-Modus oben in der Mitte aus, um Editor und formatierte Vorschau gleichzeitig zu sehen.
-Schalte rechts oben auf den Dark-Modus um, um die Lesbarkeit zu erhöhnen!
----
+## Diese Notiz zeigt dir die wichtigsten Formatierungsmöglichkeiten von Markdown. Wähle den Split-View-Modus oben in der Mitte aus, um Editor und formatierte Vorschau gleichzeitig zu sehen. Schalte rechts oben auf den Dark-Modus um, um die Lesbarkeit zu erhöhnen!
 
 ## Tags
 
 Tags helfen dir, Notizen zu organisieren und zu filtern. Sie werden als YAML-Kopfbereich ganz am Anfang einer Notiz definiert – noch vor dem eigentlichen Inhalt.
 
-**Format 1 – kommagetrennt:**
+**kommagetrennt:**
 
 ```
 ---
@@ -436,20 +433,8 @@ tags: rezepte, ideen, arbeit
 ---
 ```
 
-**Format 2 – YAML-Liste:**
-
-```
----
-tags:
-  - rezepte
-  - ideen
-  - arbeit
----
-```
-
 Diese Notiz verwendet die Tags `tutorial`, `markdown` und `willkommen`. Sie erscheinen oben in der Notizliste und lassen sich per Klick filtern.
 
----
 
 ## Überschriften
 
