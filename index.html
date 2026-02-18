@@ -31,7 +31,12 @@
         <div class="auth-brand">
           <img src="logomarkdown.svg" alt="MikesMarkdown Logo" class="brand-logo" />
           <div>
-            <h1>MikesMarkdown</h1>
+            <div class="brand-title-row">
+              <h1>MikesMarkdown</h1>
+              <button class="btn-info" title="Über MikesMarkdown" aria-label="Über MikesMarkdown">
+                <svg width="15" height="15" viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg"><circle cx="8" cy="8" r="7" stroke="currentColor" stroke-width="1.5"/><path d="M8 7v5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/><circle cx="8" cy="4.5" r="0.85" fill="currentColor"/></svg>
+              </button>
+            </div>
             <p class="brand-tagline">Life-altering Notes</p>
           </div>
         </div>
@@ -148,7 +153,12 @@
         <div class="brand">
           <img src="logomarkdown.svg" alt="MikesMarkdown Logo" class="brand-logo" />
           <div>
-            <h1>MikesMarkdown</h1>
+            <div class="brand-title-row">
+              <h1>MikesMarkdown</h1>
+              <button class="btn-info" title="Über MikesMarkdown" aria-label="Über MikesMarkdown">
+                <svg width="15" height="15" viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg"><circle cx="8" cy="8" r="7" stroke="currentColor" stroke-width="1.5"/><path d="M8 7v5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/><circle cx="8" cy="4.5" r="0.85" fill="currentColor"/></svg>
+              </button>
+            </div>
             <p class="brand-tagline">Life-altering Notes</p>
           </div>
         </div>
@@ -354,6 +364,49 @@
             <button type="submit" class="modal-confirm">Passwort ändern</button>
           </div>
         </form>
+      </div>
+    </div>
+
+    <!-- ─── Info / About dialog ─── -->
+    <div class="modal-overlay" id="info-modal" style="display:none;">
+      <div class="modal-box info-modal-box">
+        <div class="info-modal-header">
+          <h3>Über MikesMarkdown</h3>
+          <button class="info-modal-close" id="info-modal-close" aria-label="Schließen">
+            <svg width="14" height="14" viewBox="0 0 14 14" fill="none"><path d="M1 1l12 12M13 1L1 13" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>
+          </button>
+        </div>
+        <div class="info-modal-content">
+          <section class="info-section">
+            <h4>Was ist MikesMarkdown?</h4>
+            <p>MikesMarkdown ist ein persönlicher Notizmanager, der Markdown als Formatierungssprache nutzt. Schreibe strukturierte Notizen mit Überschriften, Listen, Code-Blöcken und mehr – und sieh sie sofort als schön formatiertes Dokument.</p>
+          </section>
+          <section class="info-section">
+            <h4>Funktionen</h4>
+            <ul class="info-list">
+              <li>Notizen erstellen, bearbeiten und löschen</li>
+              <li>Echtzeit-Markdown-Vorschau mit Split-View</li>
+              <li>Syntax-Highlighting für Code-Blöcke</li>
+              <li>Tags zur Organisation deiner Notizen</li>
+              <li>Volltextsuche über alle Notizen</li>
+              <li>Dark Mode</li>
+              <li>Import per Drag &amp; Drop (.md, .txt)</li>
+              <li>Notizen als .md-Datei exportieren</li>
+              <li>Sicheres Benutzerkonto mit Passwortschutz</li>
+            </ul>
+          </section>
+          <section class="info-section">
+            <h4>Datenschutz</h4>
+            <p>Deine Notizen werden ausschließlich auf dem Server gespeichert und sind nur für dich zugänglich. Es werden keine Daten an Dritte weitergegeben. Es kommen keine Tracking-Cookies oder externe Analysedienste zum Einsatz.</p>
+          </section>
+          <section class="info-section">
+            <h4>Technologie</h4>
+            <p>MikesMarkdown wurde mit Vanilla JavaScript, PHP und MySQL entwickelt. Für die Markdown-Verarbeitung wird <em>Marked.js</em> verwendet, für XSS-Schutz <em>DOMPurify</em> und für Syntax-Highlighting <em>Highlight.js</em>.</p>
+          </section>
+        </div>
+        <div class="modal-actions">
+          <button class="modal-cancel" id="info-modal-ok">Schließen</button>
+        </div>
       </div>
     </div>
 

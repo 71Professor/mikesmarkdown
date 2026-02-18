@@ -38,6 +38,9 @@
   const btnLogout = $("#btn-logout");
   const btnSettings = $("#btn-settings");
 
+  // Info modal refs
+  const infoModal = $("#info-modal");
+
   // Password change modal refs
   const changePasswordModal = $("#change-password-modal");
   const changePasswordForm = $("#change-password-form");
@@ -1331,6 +1334,22 @@ ${sanitized}
       if (e.target === changePasswordModal) {
         changePasswordModal.style.display = "none";
       }
+    });
+
+    // Info modal
+    $$(".btn-info").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        infoModal.style.display = "";
+      });
+    });
+    $("#info-modal-close").addEventListener("click", () => {
+      infoModal.style.display = "none";
+    });
+    $("#info-modal-ok").addEventListener("click", () => {
+      infoModal.style.display = "none";
+    });
+    infoModal.addEventListener("click", (e) => {
+      if (e.target === infoModal) infoModal.style.display = "none";
     });
 
     // Check for reset token in URL (for email links in production)
