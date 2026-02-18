@@ -411,6 +411,169 @@ function registerUser(mysqli $db, array $body): void
     $userId = (int) $stmt->insert_id;
     $stmt->close();
 
+    // Create default how-to-markdown note for every new user
+    $welcomeContent = <<<'MARKDOWN'
+---
+tags: tutorial, markdown, willkommen
+---
+
+# how-to-markdown
+
+Diese Notiz zeigt dir die wichtigsten Formatierungsmöglichkeiten von Markdown.
+Nutze den Split-View-Modus (Teilen-Symbol oben rechts), um Editor und formatierte Vorschau gleichzeitig zu sehen.
+
+---
+
+## Tags
+
+Tags helfen dir, Notizen zu organisieren und zu filtern. Sie werden als YAML-Kopfbereich ganz am Anfang einer Notiz definiert – noch vor dem eigentlichen Inhalt.
+
+**Format 1 – kommagetrennt:**
+
+```
+---
+tags: rezepte, ideen, arbeit
+---
+```
+
+**Format 2 – YAML-Liste:**
+
+```
+---
+tags:
+  - rezepte
+  - ideen
+  - arbeit
+---
+```
+
+Diese Notiz verwendet die Tags `tutorial`, `markdown` und `willkommen`. Sie erscheinen oben in der Notizliste und lassen sich per Klick filtern.
+
+---
+
+## Überschriften
+
+```
+# Überschrift 1
+## Überschrift 2
+### Überschrift 3
+#### Überschrift 4
+```
+
+# Überschrift 1
+## Überschrift 2
+### Überschrift 3
+#### Überschrift 4
+
+---
+
+## Textformatierung
+
+```
+**Fett**  *Kursiv*  ~~Durchgestrichen~~  `Inline-Code`
+```
+
+**Fett** · *Kursiv* · ~~Durchgestrichen~~ · `Inline-Code`
+
+---
+
+## Listen
+
+**Ungeordnet:**
+
+```
+- Punkt 1
+- Punkt 2
+  - Unterpunkt
+```
+
+- Punkt 1
+- Punkt 2
+  - Unterpunkt
+
+**Geordnet:**
+
+```
+1. Erster Punkt
+2. Zweiter Punkt
+3. Dritter Punkt
+```
+
+1. Erster Punkt
+2. Zweiter Punkt
+3. Dritter Punkt
+
+**Aufgabenliste:**
+
+```
+- [x] Erledigt
+- [ ] Noch offen
+```
+
+- [x] Erledigt
+- [ ] Noch offen
+
+---
+
+## Code
+
+Inline: `` `const msg = "Hallo Welt";` ``
+
+Block mit Syntax-Highlighting:
+
+```javascript
+function greet(name) {
+  return `Hallo, ${name}!`;
+}
+
+console.log(greet("Welt"));
+```
+
+---
+
+## Zitate
+
+```
+> "Der beste Weg, die Zukunft vorherzusagen,
+> ist, sie zu gestalten."
+```
+
+> "Der beste Weg, die Zukunft vorherzusagen,
+> ist, sie zu gestalten."
+
+---
+
+## Links
+
+```
+[Linktext](https://beispiel.de)
+```
+
+[Markdown-Referenz](https://www.markdownguide.org)
+
+---
+
+## Horizontale Trennlinie
+
+Drei oder mehr Bindestriche auf einer eigenen Zeile erzeugen eine Trennlinie:
+
+```
+---
+```
+MARKDOWN;
+
+    $welcomeId    = generateId();
+    $welcomeTitle = 'how-to-markdown';
+    $welcomeNow   = gmdate('Y-m-d H:i:s');
+    $welcomePinned = 0;
+
+    $stmtWelcome = $db->prepare(
+        "INSERT INTO notes (id, user_id, title, content, pinned, created, lastAccessed) VALUES (?, ?, ?, ?, ?, ?, ?)"
+    );
+    $stmtWelcome->bind_param('sississ', $welcomeId, $userId, $welcomeTitle, $welcomeContent, $welcomePinned, $welcomeNow, $welcomeNow);
+    $stmtWelcome->execute();
+    $stmtWelcome->close();
+
     // Generate email verification token
     $token = bin2hex(random_bytes(32));
     $now = gmdate('Y-m-d H:i:s');
