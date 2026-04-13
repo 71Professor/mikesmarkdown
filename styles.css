@@ -268,6 +268,16 @@ button {
   text-decoration: underline;
 }
 
+.legal-link {
+  color: var(--text-secondary);
+  font-size: 13px;
+  text-decoration: none;
+  white-space: nowrap;
+}
+.legal-link:hover {
+  color: var(--text);
+}
+
 /* ── Toolbar ──────────────────────────────────────── */
 .toolbar {
   display: flex;
